@@ -197,14 +197,15 @@ def disp_measure(a, x):
 
 
 def compare_arrays(a, b):
-    """Compute the distances between each line vector of two 2d-arrays a and b and match the smallest distances.
+    """Compute the distances between each line vector of two 2d-arrays a and b and match the smallest distances from
+    the lines of a to the lines of b.
 
     Return : tuple (ind, dist) where :
         -ind is a flat array such as ind[i] is the line of b closest to the ith line of a
         -dist is a flat array containing the corresponding distances """
 
-    assert a.shape == b.shape
-    # a,b have shape (N, d), dist has shape N, N
+    # a,b have shape (N1, d), (N2,d), dist has shape N1, N2
     dist = np.sqrt(np.sum((a[:, np.newaxis, :] - b[np.newaxis, :, :])**2, axis=-1))
+    # shape N1
     ind_min = np.argmin(dist, axis=1)
     return ind_min, dist[np.arange(len(a)), ind_min]

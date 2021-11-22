@@ -1,3 +1,5 @@
 *.idea
 *.npz
 *.png
+*.json
+*.out
