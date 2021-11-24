@@ -92,7 +92,8 @@ class SFW:
     def _stop(self):
         return self.ak, self.xk
 
-    def reconstruct(self, grid=None, niter=7, use_hard_stop=True, verbose=True, early_stopping=False) -> (np.ndarray, np.ndarray):
+    def reconstruct(self, grid=None, niter=7,
+                    use_hard_stop=True, verbose=True, early_stopping=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the the measure based on the measurements self.y.
 
@@ -107,8 +108,8 @@ class SFW:
             -xk is a (K, d) shaped array containing the locations of the K spikes composing the measure
         """
 
-        xmin, xmax = -10, 10
-        amin, amax = 0, 100
+        xmin, xmax = -np.inf, np.inf
+        amin, amax = 0, np.inf
         self.nk = 0
 
         for i in range(niter):
