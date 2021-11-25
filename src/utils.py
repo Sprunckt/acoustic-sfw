@@ -1,11 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+import pyroomacoustics as pra
 
 tol = 1e-10
 c = 343
+# standard pyroomacoustics offset for RIR start
+std_off = pra.constants.get("frac_delay_length") // 2
 
 
-def multichannel_rir_to_vec(rir: list, start_offset: int = 40, source: int = 0) -> (np.ndarray, int, int):
+def multichannel_rir_to_vec(rir: list, start_offset: int = std_off, source: int = 0) -> (np.ndarray, int, int):
     """
     Convert a list of RIRs of length N corresponding to M microphones to a single flat array of length J=N*M.
 
@@ -184,6 +188,22 @@ def plot_3d_sphere(fun, radius, dtheta, dphi):
         plt.show()
 
 
+def plot_room(mic, src, ampl, reconstr_src):
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="3d")
+
+    src_ind = np.argmax(ampl)
+    ax.scatter(*src[src_ind], label='source', marker='x')
+    sec_src_ind = ampl < np.max(ampl)
+    ax.scatter(mic[:, 0], mic[:, 1], mic[:, 2], label='microphones', marker='+')
+    ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
+               marker='X', alpha=0.7, s=3, color='blue')
+    ax.scatter(reconstr_src[:, 0], reconstr_src[:, 1], reconstr_src[:, 2], label='reconstructed sources',
+               marker='o',  edgecolor='k')
+    plt.legend()
+    plt.show()
+
+
 def disp_measure(a, x):
     """
     Print the measure defined by the array of amplitudes a and the array of positions x.
@@ -209,3 +229,29 @@ def compare_arrays(a, b):
     # shape N1
     ind_min = np.argmin(dist, axis=1)
     return ind_min, dist[np.arange(len(a)), ind_min]
+
+
+def array_to_list(arr):
+    """Converts arr to a list if arr is an ndarray, leave as it is otherwise."""
+    if type(arr) == np.ndarray:
+        return arr.tolist()
+    else:
+        return arr
+
+
+def dict_to_json(dico, path):
+    dd = dico.copy()
+    for key in dd:
+        dd[key] = array_to_list(dd[key])
+    fd = open(path, 'w')
+    json.dump(dd, fd)
+    fd.close()
+
+
+def save_results(file_name, image_pos, ampl, reconstr_pos, reconstr_ampl, rir, reconstr_rir, N, rmax, **kwargs):
+    exp_res = dict(image_pos=array_to_list(image_pos), ampl=array_to_list(ampl),
+                   reconstr_pos=array_to_list(reconstr_pos), reconstr_ampl=array_to_list(reconstr_ampl),
+                   rir=array_to_list(rir), reconstr_rir=array_to_list(reconstr_rir), N=N, rmax=rmax)
+    for arg in kwargs:
+        exp_res[arg] = kwargs[arg]
+    dict_to_json(exp_res, file_name)
