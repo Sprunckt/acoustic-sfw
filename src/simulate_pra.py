@@ -1,7 +1,7 @@
 import numpy as np
 import pyroomacoustics as pra
 import json
-from utils import multichannel_rir_to_vec, array_to_list
+from utils import multichannel_rir_to_vec, array_to_list, json_to_dict
 
 
 def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
@@ -33,9 +33,7 @@ def simulate_rir(conf_path, save=None):
     """
 
     if type(conf_path) == str:
-        fd = open(conf_path, 'r')
-        param_dict = json.load(fd)
-        fd.close()
+        param_dict = json_to_dict(conf_path)
     else:
         param_dict = conf_path
 

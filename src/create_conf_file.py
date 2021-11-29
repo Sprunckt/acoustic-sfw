@@ -1,7 +1,7 @@
 import os
 import json
 
-directory = "sfw_exp2"
+directory = "sfw_exp3"
 param_dict = dict()
 # bounds for the room dimensions
 param_dict["xlim"] = [2, 10]
@@ -13,6 +13,7 @@ param_dict["mic_src_sep"] = 1.
 param_dict["src_wall_sep"] = 1.
 param_dict["mic_wall_sep"] = 1.
 param_dict["dr"] = 0.3
+param_dict["rmin"] = 1.5
 param_dict["dphi"] = 25
 param_dict["fs"] = 16000
 # additional constraint to set the antenna and source altitudes (set to None to keep random)

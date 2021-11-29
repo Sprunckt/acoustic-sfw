@@ -8,15 +8,14 @@ import json
 import pandas as pd
 import os
 import sys
-import pyroomacoustics as pra
-from utils import (multichannel_rir_to_vec, create_grid_spherical,
-                   compare_arrays, c, save_results, dict_to_json, array_to_list)
+from utils import (create_grid_spherical,
+                   compare_arrays, c, save_results, dict_to_json)
 from simulate_pra import load_antenna, simulate_rir
 
 from sfw import SFW
 tol_recov = 2e-2
 
-directory = "sfw_exp2"
+directory = "sfw_exp3"
 if not os.path.exists(directory):
     os.mkdir(directory)
 
@@ -114,7 +113,7 @@ for i in range(new_exp):
     # compute the maximal radius that can be reached depending on tmax
     rmax = c * N / fs + 0.5
     # create a spherical grid
-    grid, sph_grid, n_sph = create_grid_spherical(1, rmax, param_dict["dr"],
+    grid, sph_grid, n_sph = create_grid_spherical(param_dict["rmin"], rmax, param_dict["dr"],
                                                   param_dict["dphi"], param_dict["dphi"])
     n_grid = grid.shape[0]
 
@@ -131,7 +130,7 @@ for i in range(new_exp):
 
     stdout = sys.stdout
     sys.stdout = open(os.path.join(directory, str_id + ".out"), 'w')  # redirecting stdout to capture the prints
-    a, x = s.reconstruct(grid, 7, True, True)
+    a, x = s.reconstruct(grid=grid, niter=7, use_hard_stop=True, verbose=True)
     sys.stdout.close()
     sys.stdout = stdout
 
@@ -142,7 +141,7 @@ for i in range(new_exp):
                  src, ampl, x, a, measurements, r, N, rmax)
 
     # compute the distances between real and reconstructed positions and save them in the global csv
-    ind, dist = compare_arrays(src, x)
+    ind, dist = compare_arrays(x, src)
     # number of distinct recovered sources
     nb_recov = np.minimum((dist < tol_recov).sum(), len(np.unique(ind)))
     # mean error for recovered sources

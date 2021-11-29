@@ -1,8 +1,11 @@
 import numpy as np
 from scipy.optimize import minimize
-from utils import (disp_measure, tol, c)
+from utils import (disp_measure, c)
 import multiprocessing
 import time
+
+sfw_tol = 1e-3
+merge_tol = 0.1
 
 
 class SFW:
@@ -34,6 +37,9 @@ class SFW:
         self.xkp = np.zeros((1, self.d))  # temporary storage for spike locations
         self.res = self.y.copy()  # residue
         self.nk = 0
+
+        self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
+                            'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
 
     def sinc_filt(self, t):
         """
@@ -87,12 +93,13 @@ class SFW:
         return 0.5 * np.sum((self.gamma(a, x) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
     def _optigrid(self, x):
-        return minimize(self.etak, x, jac="3-point", method="BFGS")
+        return minimize(self.etak, x, jac="3-point", method="BFGS", options=self.opt_options)
 
     def _stop(self):
         return self.ak, self.xk
 
-    def reconstruct(self, grid=None, niter=7,
+    def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf,
+                    rough_search=False, spike_merging=False,
                     use_hard_stop=True, verbose=True, early_stopping=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the the measure based on the measurements self.y.
@@ -100,6 +107,8 @@ class SFW:
         Args:
             -grid (array) : grid used for the initial guess of the new spike
             -niter (int) : maximal number of iterations
+            -min_norm (float) : minimal norm allowed for the position found at the end of the grid search
+            -max_norm (float) : used as bounds for the coordinates of the spike locations in each direction
             -use_hard_stop (bool) : if True, add |etak| < 1 as a stopping condition
             -early_stopping (bool) : if True, stop at the end of an iteration if the last spike found has zero amplitude
          Return:
@@ -108,8 +117,8 @@ class SFW:
             -xk is a (K, d) shaped array containing the locations of the K spikes composing the measure
         """
 
-        xmin, xmax = -np.inf, np.inf
-        amin, amax = 0, np.inf
+        xmin, xmax = -max_norm, max_norm
+        amin, amax = 0, max_ampl
         self.nk = 0
 
         for i in range(niter):
@@ -119,33 +128,40 @@ class SFW:
                 print("Optimizing for spike position -----")
 
             # grid search : one optimization per grid point (the grid has the shape (N, d))
-            if grid is not None:
-                tstart = time.time()
+            tstart = time.time()
 
-                if verbose:
-                    print("Starting a grid search to minimize etak")
+            if verbose:
+                print("Starting a grid search to minimize etak")
 
-                # spreading the loop over multiple processors
-                p = multiprocessing.Pool(8)
-                gr_opt = p.map(self._optigrid, grid)
-                p.close()
+            if rough_search:  # perform a low precision search
+                self.opt_options["gtol"] = 1e-2
+                self.opt_options["maxiter"] = 150
 
-                # searching for the best result over the grid
-                curr_min, curr_opti_res = np.inf, None
-                for el in gr_opt:
-                    if el.fun < curr_min:
-                        curr_min = el.fun
-                        curr_opti_res = el
+            # spreading the loop over multiple processors
+            p = multiprocessing.Pool(8)
+            gr_opt = p.map(self._optigrid, grid)
+            p.close()
 
-                del gr_opt
-                opti_res = curr_opti_res
-
-                if verbose:
-                    print("exec time for grid optimization : ", time.time() - tstart)
+            # searching for the best result over the grid
+            curr_min, curr_opti_res = np.inf, None
+            for el in gr_opt:
+                if el.fun < curr_min and np.linalg.norm(el.x) > min_norm:
+                    curr_min = el.fun
+                    curr_opti_res = el
+            if rough_search:  # perform a finer optimization using the position found as initialization
+                nit = curr_opti_res.nit
+                self.opt_options["gtol"] = 1e-6
+                self.opt_options["maxiter"] = 300
+                opti_res = self._optigrid(curr_opti_res.x)
+                nit += opti_res.nit
             else:
-                x_ini = np.zeros(self.d)
-                print("initial guess : {} \n eta value : {}".format(str(x_ini), self.etak(x_ini)))
-                opti_res = minimize(self.etak, x_ini, jac="3-point", method="BFGS")
+                opti_res = curr_opti_res
+                nit = opti_res.nit
+
+            del gr_opt
+
+            if verbose:
+                print("exec time for grid optimization : ", time.time() - tstart)
 
             x_new = opti_res.x.reshape([1, self.d])
             etaval = np.abs(opti_res.fun)
@@ -154,18 +170,18 @@ class SFW:
                 print("etak optimization failed, reason : {}".format(opti_res.message))
 
             if verbose:
-                print("Optimization converged in {} iterations".format(opti_res.nit))
+                print("Optimization converged in {} iterations".format(nit))
                 print("New position : {} \n eta value : {}".format(x_new, etaval))
 
-            if use_hard_stop and etaval <= 1 + tol:
+            if use_hard_stop and etaval <= 1 + sfw_tol:
                 if verbose:
-                    print("Stopping criterion met : etak(x_new)={} < 1")
+                    print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
                 return self._stop()
 
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
             if self.nk > 0:
                 self.xkp = np.concatenate([self.xk, x_new], axis=0)
-                a_ini = np.append(self.ak, 0)
+                a_ini = np.append(self.ak, self.ak[-1])
             else:
                 self.xkp = np.array([x_new]).reshape(1, self.d)
                 a_ini = np.zeros(1)
@@ -203,7 +219,7 @@ class SFW:
                 print("Objective value : {}".format(opti_res.fun))
 
             # deleting null amplitude spikes
-            ind_null = np.asarray(np.abs(self.ak) < tol)
+            ind_null = np.asarray(np.abs(self.ak) < sfw_tol)
             self.ak = self.ak[~ind_null]
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
@@ -213,6 +229,35 @@ class SFW:
             elif early_stopping and len(ind_null) == 1 and ind_null[0] == len(self.ak):  # last spike is null
                 print("Last spike has null amplitude, stopping")
                 return self._stop()
+
+            if spike_merging:
+                if verbose:
+                    print("merging spikes --")
+                ak_tmp, xk_tmp = self.ak.copy(), self.xk.copy()
+                k, tmp_nk, tot_merged = 0, self.nk, 0
+
+                while k < tmp_nk:
+                    null_ind = np.zeros(tmp_nk, dtype=bool)
+                    for m in range(k+1, tmp_nk):
+                        curr_x, curr_ax = xk_tmp[k], ak_tmp[k]
+                        curr_y, curr_ay = xk_tmp[m], ak_tmp[m]
+                        if np.linalg.norm(curr_x - curr_y) < merge_tol:
+                            tot_merged += 1
+                            null_ind[m] = True
+                            # merged spike position (weighted mean of the spikes)
+                            xk_tmp[k] = ((np.abs(curr_x)*np.abs(curr_ax) + np.abs(curr_y)*np.abs(curr_ay))
+                                         / (np.abs(curr_ax) + np.abs(curr_ay)))
+                            ak_tmp[k] += curr_ay
+
+                    # deleting the merged spikes
+                    ak_tmp = ak_tmp[~null_ind]
+                    xk_tmp = xk_tmp[~null_ind]
+                    tmp_nk = (~null_ind).sum()  # number of remaining spikes
+                    k += 1
+                self.ak, self.xk = ak_tmp.copy(), xk_tmp.copy()
+                self.nk = len(self.ak)
+                if verbose:
+                    print("{} spikes merged".format(tot_merged))
 
             if verbose:
                 print("New measure :")

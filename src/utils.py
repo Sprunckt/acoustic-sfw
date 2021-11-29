@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+from itertools import product, combinations
 import pyroomacoustics as pra
 
 tol = 1e-10
@@ -195,6 +196,18 @@ def plot_room(mic, src, ampl, reconstr_src):
     src_ind = np.argmax(ampl)
     ax.scatter(*src[src_ind], label='source', marker='x')
     sec_src_ind = ampl < np.max(ampl)
+
+    wall_intersect = (src[src_ind] + src[sec_src_ind]) / 2
+    xmin, ymin, zmin = np.min(wall_intersect, axis=0)
+    xmax, ymax, zmax = np.max(wall_intersect, axis=0)
+
+    vertices = product([xmin, xmax], [ymin, ymax], [zmin, zmax])
+    edges_plus = combinations(vertices, 2)
+    for edge in edges_plus:
+        x1, x2, y1, y2, z1, z2 = edge[0][0], edge[1][0], edge[0][1], edge[1][1], edge[0][2], edge[1][2]
+        if len(np.unique([x1, x2])) + len(np.unique([y1, y2])) + len(np.unique([z1, z2])) == 4:
+            ax.plot3D([x1, x2], [y1, y2], [z1, z2], color='k')
+
     ax.scatter(mic[:, 0], mic[:, 1], mic[:, 2], label='microphones', marker='+')
     ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
                marker='X', alpha=0.7, s=3, color='blue')
@@ -246,6 +259,17 @@ def dict_to_json(dico, path):
     fd = open(path, 'w')
     json.dump(dd, fd)
     fd.close()
+
+
+def json_to_dict(path, list_to_array=True):
+    fd = open(path, 'r')
+    dump = json.load(fd)
+    fd.close()
+    if list_to_array:
+        for key in dump:
+            if type(dump[key]) == list:
+                dump[key] = np.array(dump[key])
+    return dump
 
 
 def save_results(file_name, image_pos, ampl, reconstr_pos, reconstr_ampl, rir, reconstr_rir, N, rmax, **kwargs):
