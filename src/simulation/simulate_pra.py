@@ -1,7 +1,7 @@
 import numpy as np
 import pyroomacoustics as pra
 import json
-from utils import multichannel_rir_to_vec, array_to_list, json_to_dict
+from .utils import multichannel_rir_to_vec, array_to_list, json_to_dict
 
 
 def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
@@ -62,7 +62,7 @@ def simulate_rir(conf_path, save=None):
 
     # get the image sources and corresponding amplitudes
     src = room.sources[0].get_images(max_order=max_order).T
-    ampl = room.sources[0].get_damping(max_order=1).flatten()
+    ampl = room.sources[0].get_damping(max_order=max_order).flatten()
 
     origin = param_dict.get("origin")
     if origin is not None:

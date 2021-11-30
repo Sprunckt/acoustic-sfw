@@ -1,14 +1,14 @@
 
 """
-Test script for the algorithm, meant to be executed from the source directory
+Basic working script for testing the algorithm
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pyroomacoustics as pra
-from utils import (multichannel_rir_to_vec, vec_to_rir, plot_3d_planes, plot_3d_sphere, create_grid_spherical,
-                   compare_arrays)
-from sfw import SFW
+from src.simulation.utils import (multichannel_rir_to_vec, vec_to_rir, create_grid_spherical,
+                                  compare_arrays)
+from src.sfw import SFW
 
 # Scene Parameters
 room_dim = [4, 6, 3.2]

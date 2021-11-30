@@ -8,11 +8,11 @@ import json
 import pandas as pd
 import os
 import sys
-from utils import (create_grid_spherical,
-                   compare_arrays, c, save_results, dict_to_json)
-from simulate_pra import load_antenna, simulate_rir
+from src.simulation.utils import (create_grid_spherical,
+                                  compare_arrays, c, save_results, dict_to_json)
+from src.simulation.simulate_pra import load_antenna, simulate_rir
 
-from sfw import SFW
+from src.sfw import SFW
 tol_recov = 2e-2
 
 directory = "sfw_exp3"

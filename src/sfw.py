@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import minimize
-from utils import (disp_measure, c)
+from src.simulation.utils import (disp_measure, c)
 import multiprocessing
 import time
 
@@ -135,7 +135,6 @@ class SFW:
 
             if rough_search:  # perform a low precision search
                 self.opt_options["gtol"] = 1e-2
-                self.opt_options["maxiter"] = 150
 
             # spreading the loop over multiple processors
             p = multiprocessing.Pool(8)
@@ -151,7 +150,6 @@ class SFW:
             if rough_search:  # perform a finer optimization using the position found as initialization
                 nit = curr_opti_res.nit
                 self.opt_options["gtol"] = 1e-6
-                self.opt_options["maxiter"] = 300
                 opti_res = self._optigrid(curr_opti_res.x)
                 nit += opti_res.nit
             else:
