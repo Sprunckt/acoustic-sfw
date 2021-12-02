@@ -1,19 +1,22 @@
 import numpy as np
+from typing import Union, Tuple
 from scipy.optimize import minimize
 from src.simulation.utils import (disp_measure, c)
 import multiprocessing
 import time
 
-sfw_tol = 1e-3
+sfw_tol = 1e-6
 merge_tol = 0.1
 
 
 class SFW:
-    def __init__(self, y: np.ndarray, mic_pos: np.ndarray,
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
                  fs: float, N: int, lam: float = 1e-2):
         """
         Args:
-            -y (ndarray) : measurements (shape (J,) = (N*M,))
+            -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
+        amplitudes and positions of the measure that has to be reconstructed. In that last case the ideal observations
+        are computed.
             -mic_pos (ndarray) : positions of the microphones (shape (M,d))
             -fs (float) : sampling frequency
             -N (int) : number of time samples
@@ -27,14 +30,18 @@ class SFW:
         self.d = mic_pos.shape[1]
         assert 1 < self.d < 4, "Invalid dimension d"
 
-        self.y = y
-        assert self.y.size == self.J, "invalid measurements length"
-
         self.lam = lam
         self.NN = np.arange(self.N)
 
         self.ak, self.xk = np.zeros(1), np.zeros((1, self.d))  # initializing with the null measure
         self.xkp = np.zeros((1, self.d))  # temporary storage for spike locations
+
+        if type(y) == np.ndarray:
+            self.y = y
+        else:
+            self.y = self.gamma(y[0], y[1])
+        assert self.y.size == self.J, "invalid measurements length"
+
         self.res = self.y.copy()  # residue
         self.nk = 0
 
@@ -97,6 +104,33 @@ class SFW:
 
     def _stop(self):
         return self.ak, self.xk
+
+    def merge_spikes(self):
+        ak_tmp, xk_tmp = self.ak.copy(), self.xk.copy()
+        k, tmp_nk, tot_merged = 0, self.nk, 0
+
+        while k < tmp_nk:
+            null_ind = np.zeros(tmp_nk, dtype=bool)
+            for m in range(k + 1, tmp_nk):
+                curr_x, curr_ax = xk_tmp[k], ak_tmp[k]
+                curr_y, curr_ay = xk_tmp[m], ak_tmp[m]
+                if np.linalg.norm(curr_x - curr_y) < merge_tol:
+                    tot_merged += 1
+                    null_ind[m] = True
+                    # merged spike position (weighted mean of the spikes)
+                    xk_tmp[k] = ((np.abs(curr_x) * np.abs(curr_ax) + np.abs(curr_y) * np.abs(curr_ay))
+                                 / (np.abs(curr_ax) + np.abs(curr_ay)))
+                    ak_tmp[k] += curr_ay
+
+            # deleting the merged spikes
+            ak_tmp = ak_tmp[~null_ind]
+            xk_tmp = xk_tmp[~null_ind]
+            tmp_nk = (~null_ind).sum()  # number of remaining spikes
+            k += 1
+        self.ak, self.xk = ak_tmp.copy(), xk_tmp.copy()
+        self.nk = len(self.ak)
+
+        return tot_merged
 
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf,
                     rough_search=False, spike_merging=False,
@@ -231,29 +265,9 @@ class SFW:
             if spike_merging:
                 if verbose:
                     print("merging spikes --")
-                ak_tmp, xk_tmp = self.ak.copy(), self.xk.copy()
-                k, tmp_nk, tot_merged = 0, self.nk, 0
 
-                while k < tmp_nk:
-                    null_ind = np.zeros(tmp_nk, dtype=bool)
-                    for m in range(k+1, tmp_nk):
-                        curr_x, curr_ax = xk_tmp[k], ak_tmp[k]
-                        curr_y, curr_ay = xk_tmp[m], ak_tmp[m]
-                        if np.linalg.norm(curr_x - curr_y) < merge_tol:
-                            tot_merged += 1
-                            null_ind[m] = True
-                            # merged spike position (weighted mean of the spikes)
-                            xk_tmp[k] = ((np.abs(curr_x)*np.abs(curr_ax) + np.abs(curr_y)*np.abs(curr_ay))
-                                         / (np.abs(curr_ax) + np.abs(curr_ay)))
-                            ak_tmp[k] += curr_ay
+                tot_merged = self.merge_spikes()
 
-                    # deleting the merged spikes
-                    ak_tmp = ak_tmp[~null_ind]
-                    xk_tmp = xk_tmp[~null_ind]
-                    tmp_nk = (~null_ind).sum()  # number of remaining spikes
-                    k += 1
-                self.ak, self.xk = ak_tmp.copy(), xk_tmp.copy()
-                self.nk = len(self.ak)
                 if verbose:
                     print("{} spikes merged".format(tot_merged))
 
