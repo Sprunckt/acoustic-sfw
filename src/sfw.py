@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Union, Tuple
 from scipy.optimize import minimize
+from sklearn.linear_model import Lasso
 from src.simulation.utils import (disp_measure, c)
 import multiprocessing
 import time
@@ -76,13 +77,29 @@ class SFW:
         """Objective function for the new spike location optimization"""
 
         # distances from x (in R^3) to every microphone, shape (M,)
-        dist = np.sqrt(np.sum((x[np.newaxis, :] - self.mic_pos) ** 2, axis=1))
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def _create_gamma_mat(self, x):
+        """
+        Linear operator (M(R^d) -> R^J)
+        Args:
+            -a (array) : flat array containing the amplitudes of the spikes
+            -x (array) : positions of the spikes, shape (len(a), d)
+        Return: array containing the evaluation of gamma on the measure (shape (J,))
+        """
+
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # shape (M, N, K) -> (J, K)
+        return np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
+                          / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.J, -1))
 
     def _obj_lasso(self, a):
         """
@@ -213,24 +230,21 @@ class SFW:
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
             if self.nk > 0:
                 self.xkp = np.concatenate([self.xk, x_new], axis=0)
-                a_ini = np.append(self.ak, self.ak[-1])
             else:
                 self.xkp = np.array([x_new]).reshape(1, self.d)
-                a_ini = np.zeros(1)
             self.nk += 1
 
             if verbose:
                 print("Optimizing for spike amplitudes --------")
-                print("initial value : {}".format(self._obj_lasso(a_ini)))
 
-            bounds = [(amin, amax)] * self.nk
-            opti_res = minimize(self._obj_lasso, x0=a_ini, jac="3-point", method="L-BFGS-B", bounds=bounds)
-            ak_new = opti_res.x
-            if not opti_res.success:
-                print("ak optimization failed, reason : {}".format(opti_res.message))
-            elif verbose:
-                print("Optimization converged in {} iterations".format(opti_res.nit))
-                print("New amplitudes : {} \n objective value : {}".format(ak_new, opti_res.fun))
+            lasso_fitter = Lasso(alpha=self.lam, positive=True)
+            gamma_mat = self._create_gamma_mat(self.xkp)
+            lasso_fitter.fit(np.sqrt(self.J) * gamma_mat,
+                             np.sqrt(self.J) * self.y)
+            ak_new = lasso_fitter.coef_.flatten()
+            if verbose:
+                print("LASSO solved in {} iterations".format(lasso_fitter.n_iter_))
+                print("New amplitudes : {} \n".format(ak_new))
 
             # solve to adjust both the positions and amplitudes
             ini = np.concatenate([ak_new, self.xkp.flatten()])
