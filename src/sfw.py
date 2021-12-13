@@ -7,7 +7,7 @@ import multiprocessing
 import time
 
 sfw_tol = 1e-6
-merge_tol = 0.1
+merge_tol = 0.02
 
 
 class SFW:
@@ -21,7 +21,7 @@ class SFW:
             -mic_pos (ndarray) : positions of the microphones (shape (M,d))
             -fs (float) : sampling frequency
             -N (int) : number of time samples
-            -lam (float) : penalization parameter of the BLASSO
+            -lam (float) : penalization parameter of the BLASSO.
         """
 
         self.fs, self.N = fs, N
@@ -48,6 +48,8 @@ class SFW:
 
         self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
                             'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
+        self.eta = None
+        self.timer = None
 
     def sinc_filt(self, t):
         """
@@ -74,7 +76,8 @@ class SFW:
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
     def etak(self, x: np.ndarray) -> float:
-        """Objective function for the new spike location optimization"""
+        """Objective function for the new spike location optimization ; the normalization by lambda is only taken in
+        account for the stopping criterion and not during optimization"""
 
         # distances from x (in R^3) to every microphone, shape (M,)
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
@@ -82,6 +85,17 @@ class SFW:
         # shape (M, N) to (M*N,)
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
+
+        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def etak_norm1(self, x: np.ndarray) -> float:
+        """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
+                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
 
@@ -117,9 +131,11 @@ class SFW:
         return 0.5 * np.sum((self.gamma(a, x) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
     def _optigrid(self, x):
-        return minimize(self.etak, x, jac="3-point", method="BFGS", options=self.opt_options)
+        return minimize(self.eta, x, jac="3-point", method="BFGS", options=self.opt_options)
 
-    def _stop(self):
+    def _stop(self, verbose=True):
+        if verbose:
+            print("total exec time : {} s".format(time.time() - self.timer))
         return self.ak, self.xk
 
     def merge_spikes(self):
@@ -149,7 +165,7 @@ class SFW:
 
         return tot_merged
 
-    def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf,
+    def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     rough_search=False, spike_merging=False,
                     use_hard_stop=True, verbose=True, early_stopping=False) -> (np.ndarray, np.ndarray):
         """
@@ -158,15 +174,22 @@ class SFW:
         Args:
             -grid (array) : grid used for the initial guess of the new spike
             -niter (int) : maximal number of iterations
+            -max_ampl (float) : upper bound on spikes amplitudes
+            -normalization (int) : the normalization to add to gamma for he spike localization step. 0 means no
+        normalization, 1 adds a factor 1/(sqrt(sum(1/dist(x, xm)**2))
             -min_norm (float) : minimal norm allowed for the position found at the end of the grid search
             -max_norm (float) : used as bounds for the coordinates of the spike locations in each direction
             -use_hard_stop (bool) : if True, add |etak| < 1 as a stopping condition
             -early_stopping (bool) : if True, stop at the end of an iteration if the last spike found has zero amplitude
+
          Return:
             (ak, xk) where :
             -ak is a flat array of shape (K,) containing the amplitudes of the recovered measure
             -xk is a (K, d) shaped array containing the locations of the K spikes composing the measure
         """
+        self.timer = time.time()
+        normalizations = [self.etak, self.etak_norm1]
+        self.eta = normalizations[normalization]
 
         xmin, xmax = -max_norm, max_norm
         amin, amax = 0, max_ampl
@@ -188,7 +211,8 @@ class SFW:
                 self.opt_options["gtol"] = 1e-2
 
             # spreading the loop over multiple processors
-            p = multiprocessing.Pool(8)
+            ncores = multiprocessing.cpu_count()
+            p = multiprocessing.Pool(ncores)
             gr_opt = p.map(self._optigrid, grid)
             p.close()
 
@@ -225,7 +249,7 @@ class SFW:
             if use_hard_stop and etaval <= 1 + sfw_tol:
                 if verbose:
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
-                return self._stop()
+                return self._stop(verbose=verbose)
 
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
             if self.nk > 0:
@@ -274,7 +298,7 @@ class SFW:
                 return
             elif early_stopping and len(ind_null) == 1 and ind_null[0] == len(self.ak):  # last spike is null
                 print("Last spike has null amplitude, stopping")
-                return self._stop()
+                return self._stop(verbose=verbose)
 
             if spike_merging:
                 if verbose:
@@ -291,4 +315,4 @@ class SFW:
             gk = self.gamma(self.ak, self.xk)
             self.res = self.y - gk
         print("Maximum number of iterations {} reached".format(niter))
-        return self._stop()
+        return self._stop(verbose=verbose)

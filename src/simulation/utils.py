@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Tuple
 import json
 from itertools import product, combinations
 import pyroomacoustics as pra
@@ -127,7 +128,7 @@ def plot_3d_planes(fun, slices, other_bounds, N, axis=0):
     print("Maximum on each slice : {} \n Minimum on each slice : {}".format(m, mm))
 
 
-def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False):
+def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.ndarray, np.ndarray, int):
     """Create a grid using spherical coordinates. Adapted form Khaoula Chahdi.
     Args:
         -rmin, rmax (float) : boundaries for the radius
@@ -164,6 +165,7 @@ def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False):
     grid = np.array(grid).reshape(-1, 3)
     sph_grid = np.array(sph_grid).reshape(-1, 3)
     n_per_sphere = n // n_r
+
     return grid, sph_grid, n_per_sphere
 
 
@@ -229,9 +231,9 @@ def disp_measure(a, x):
     print("{}*d_({},{},{})".format(a[-1], *x[-1]))
 
 
-def compare_arrays(a, b):
+def compare_arrays(a, b, unique=False):
     """Compute the distances between each line vector of two 2d-arrays a and b and match the smallest distances from
-    the lines of a to the lines of b.
+    the lines of a to the lines of b (compare_arrats(a, b) != compare_arrays(b, a)).
 
     Return : tuple (ind, dist) where :
         -ind is a flat array such as ind[i] is the line of b closest to the ith line of a
@@ -242,6 +244,44 @@ def compare_arrays(a, b):
     # shape N1
     ind_min = np.argmin(dist, axis=1)
     return ind_min, dist[np.arange(len(a)), ind_min]
+
+
+def unique_matches(a, b, ampl) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute the distances between each line vector of two 2d-arrays a and b and match the smallest distances from
+    the lines of a to the lines of b. If more than one line of a is matched to the same line of b, the array ampl is 
+    used to eliminate the duplicate matches.
+    
+    Args:-ampl (ndarray):flat array of amplitudes used to sort the matches. If a[k] and a[l] are matched to b[m] and
+    ampl[k] < ampl[l] only a[l] is considered. If all amplitudes are equal the smallest index wins.
+    
+    Return: tuple(inda, indb, dist) where :
+        -inda, indb are the arrays giving the index of matches between the lines of a and b
+        -dist is the corresponding array of distances
+    """
+    assert len(a) == len(ampl), "invalid shapes"
+
+    ind_min, dist = compare_arrays(a, b)
+    unique = np.unique(ind_min)
+    final_inda_list, final_indb_list, final_dist_list = [], [], []
+    for ind in unique:
+        tmp_ampl = np.zeros_like(ampl)
+        matches = ind_min == ind
+        tmp_ampl[matches] = ampl[matches]
+        best_match = np.argmax(tmp_ampl)
+        final_inda_list.append(best_match)
+        final_indb_list.append(ind_min[best_match])
+        final_dist_list.append(dist[best_match])
+
+    return np.array(final_inda_list), np.array(final_indb_list), np.array(final_dist_list)
+
+
+def correlation(a1, a2):
+    assert a1.size == a2.size, "vector lengths do not match"
+    prod = np.linalg.norm(a1) * np.linalg.norm(a2)
+    if prod < tol:
+        return 0
+    else:
+        return np.dot(a1, a2) / prod
 
 
 def array_to_list(arr):

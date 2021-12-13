@@ -1,7 +1,8 @@
 from src.sfw import SFW
 import numpy as np
 import matplotlib.pyplot as plt
-from src.simulation.utils import create_grid_spherical, c, compare_arrays, save_results, json_to_dict, plot_room
+from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
+                                  json_to_dict, plot_room, correlation, unique_matches)
 from src.simulation.simulate_pra import simulate_rir
 import os
 import sys
@@ -12,18 +13,19 @@ plot = False
 ideal = True  # if True, use the observation operator to reconstruct the measure, else use a PRA simulation
 
 # directory where the results should be saved
-save_path = "experiments/rdb1_1"
+save_path = "experiments/rdb1_5"
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
 df_path = os.path.join(save_path, "results.csv")
 if not os.path.exists(df_path):
-    df_res = pd.DataFrame(columns=["exp_id", "recov_dist", "max_dist", "nb_recov"])
+    df_res = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov", "corr_ampl",
+                                   "min_dist", "max_dist_global", "max_dist", "mean_dist"])
 else:
     df_res = pd.read_csv(df_path)
 
 # path to the parameter json files used for the simulation
-paths = ["room_db1/exp_{}_param.json".format(i) for i in range(22)]
+paths = ["room_db1/exp_{}_param.json".format(i) for i in range(0, 50)]
 
 # path to a json file containing additional parameters used for all simulations (eg grid spacing)
 meta_param_path = os.path.join(save_path, "parameters.json")
@@ -32,17 +34,18 @@ meta_param_dict = json_to_dict(meta_param_path)
 for path in paths:
     print("Applying SFW to " + os.path.split(path)[-1])
     param_dict = json_to_dict(path)
-    lam = 1e-3
+    lam, ideal = meta_param_dict["lambda"], meta_param_dict["ideal"]
+
     if ideal:
         N, src, ampl = param_dict["N"], param_dict["image_pos"], param_dict["ampl"]
-        s = SFW(y=(ampl, src), mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=1e-3)
+        s = SFW(y=(ampl, src), mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=lam)
         measurements = s.y.copy()
     else:
         # translating the microphones back to their original positions
         param_dict["mic_array"] += param_dict["origin"]
         # simulate the RIR, the center of the antenna is choosed as the new origin
         measurements, N, src, ampl, mic_array = simulate_rir(param_dict)
-        s = SFW(y=measurements, mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=1e-3)
+        s = SFW(y=measurements, mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=lam)
 
     rmax = c * N / param_dict["fs"] + 0.5
 
@@ -60,14 +63,36 @@ for path in paths:
         print("invalid path")
         exit(1)
 
+    normalization = meta_param_dict["normalization"]
+    min_norm = meta_param_dict["min_norm"]
+
     stdout = sys.stdout
     sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
-    a, x = s.reconstruct(grid=grid, niter=8, min_norm=1, max_norm=rmax, max_ampl=200, spike_merging=False,
+    a, x = s.reconstruct(grid=grid, niter=8, min_norm=min_norm, max_norm=rmax, max_ampl=200,
+                         normalization=normalization, spike_merging=False,
                          use_hard_stop=True, verbose=True, rough_search=True)
 
     reconstr_rir = s.gamma(a, x)
     ind, dist = compare_arrays(x, src)
     print("source matching and distances : \n", ind, dist)
+    max_dist_global = np.max(dist)
+
+    save_results(res_path, src, ampl, x, a,
+                 measurements, reconstr_rir, N, rmax)
+
+    inda, indb, dist = unique_matches(x, src, ampl=a)
+    mean_dist = np.mean(dist[dist < tol_recov])
+    sorted_ampl_reconstr = a[inda]
+    sorted_ampl_exact = ampl[indb]
+    correlation_ampl = correlation(sorted_ampl_exact, sorted_ampl_reconstr)
+    # number of distinct recovered sources
+    nb_recov = (dist < tol_recov).sum()
+
+    res = dict(exp_id=curr_save_path, nb_found=len(a), nb_recov=nb_recov, corr_ampl=correlation_ampl,
+               min_dist=np.min(dist), max_dist_global=max_dist_global, max_dist=np.max(dist), mean_dist=mean_dist)
+    df_res = df_res.append(res, ignore_index=True)
+    df_res.to_csv(df_path, index=False)
+
     sys.stdout.close()
     sys.stdout = stdout
 
@@ -80,16 +105,3 @@ for path in paths:
 
     if curr_save_path.endswith("_param"):
         curr_save_path = curr_save_path[:-6] + "_res.json"
-
-    save_results(res_path, src, ampl, x, a,
-                 measurements, reconstr_rir, N, rmax)
-
-    # number of distinct recovered sources
-    nb_recov = np.minimum((dist < tol_recov).sum(), len(np.unique(ind)))
-    # mean error for recovered sources
-    mean_dist = np.mean(dist[dist < tol_recov])
-
-    res = dict(exp_id=curr_save_path, nb_found=len(a), nb_recov=nb_recov,
-               min_dist=np.min(dist), max_dist=np.max(dist), mean_dist=mean_dist)
-    df_res = df_res.append(res, ignore_index=True)
-    df_res.to_csv(df_path, index=False)
