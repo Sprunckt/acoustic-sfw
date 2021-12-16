@@ -27,7 +27,7 @@ else:
     df_res = pd.read_csv(df_path)
 
 # path to the parameter json files used for the simulation
-paths = ["room_db1/exp_{}_param.json".format(i) for i in range(36, 50)]
+paths = ["room_db1/exp_{}_param.json".format(i) for i in range(0, 50)]
 
 # path to a json file containing additional parameters used for all simulations (eg grid spacing)
 meta_param_path = os.path.join(save_path, "parameters.json")
@@ -48,7 +48,8 @@ for path in paths:
     if fs != param_dict["fs"]:
         N = int(np.floor(param_dict["N"]*fs / param_dict["fs"]))
         param_dict["fs"] = fs
-
+    else:
+        N = param_dict["N"]
     if ideal:  # exact theoretical observations
         src, ampl = param_dict["image_pos"], param_dict["ampl"]
         s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)

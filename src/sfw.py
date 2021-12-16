@@ -289,6 +289,8 @@ class SFW:
                 m_max, n_max = flat_to_multi_ind(np.argmax(self.res), self.N)
                 r = n_max * c / self.fs
                 search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
+                if verbose:
+                    print("searching around mic {} at a radius {}".format(m_max, r))
 
             if verbose:
                 print("Starting a grid search to minimize etak")
