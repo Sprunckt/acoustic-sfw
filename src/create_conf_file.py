@@ -16,6 +16,7 @@ if sim_param:
     param_dict["src_wall_sep"] = 1.
     param_dict["mic_wall_sep"] = 1.
 
+    param_dict["fs"] = 16000
     # additional constraint to set the antenna and source altitudes (set to None to keep random)
     param_dict["z_src"] = 1.
     param_dict["z_mic"] = 1.

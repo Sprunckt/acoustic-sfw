@@ -15,7 +15,7 @@ plot = False
 ideal = True  # if True, use the observation operator to reconstruct the measure, else use a PRA simulation
 
 # directory where the results should be saved
-save_path = "experiments/rdb1_10"
+save_path = "experiments/rdb1b_2"
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
@@ -27,7 +27,7 @@ else:
     df_res = pd.read_csv(df_path)
 
 # path to the parameter json files used for the simulation
-paths = ["room_db1/exp_{}_param.json".format(i) for i in range(0, 50)]
+paths = ["room_db1/exp_{}_param.json".format(i) for i in range(36, 50)]
 
 # path to a json file containing additional parameters used for all simulations (eg grid spacing)
 meta_param_path = os.path.join(save_path, "parameters.json")
@@ -45,8 +45,12 @@ for path in paths:
     else:
         mic_pos = param_dict["mic_array"]
 
+    if fs != param_dict["fs"]:
+        N = int(np.floor(param_dict["N"]*fs / param_dict["fs"]))
+        param_dict["fs"] = fs
+
     if ideal:  # exact theoretical observations
-        N, src, ampl = param_dict["N"], param_dict["image_pos"], param_dict["ampl"]
+        src, ampl = param_dict["image_pos"], param_dict["ampl"]
         s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
         measurements = s.y.copy()
     else:  # recreation using pyroom acoustics. Caution : the parameters are only taken from the room parameters file
@@ -77,6 +81,7 @@ for path in paths:
     min_norm = meta_param_dict["min_norm"]
     spherical_search = meta_param_dict.get("spherical_search", 0)
     stdout = sys.stdout
+
     sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
     a, x = s.reconstruct(grid=grid, niter=8, min_norm=min_norm, max_norm=max_norm, max_ampl=200,
                          normalization=normalization, spike_merging=False, spherical_search=spherical_search,
