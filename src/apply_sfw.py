@@ -2,18 +2,20 @@ from src.sfw import SFW
 import numpy as np
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
-                                  json_to_dict, plot_room, correlation, unique_matches)
-from src.simulation.simulate_pra import simulate_rir
+                                  json_to_dict, correlation, unique_matches)
+from src.visualization import plot_room
+from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
 import sys
 import pandas as pd
+import time
 tol_recov = 2e-2
 
 plot = False
 ideal = True  # if True, use the observation operator to reconstruct the measure, else use a PRA simulation
 
 # directory where the results should be saved
-save_path = "experiments/rdb1_5"
+save_path = "experiments/rdb1_10"
 if not os.path.exists(save_path):
     os.mkdir(save_path)
 
@@ -31,27 +33,35 @@ paths = ["room_db1/exp_{}_param.json".format(i) for i in range(0, 50)]
 meta_param_path = os.path.join(save_path, "parameters.json")
 meta_param_dict = json_to_dict(meta_param_path)
 
+tstart = time.time()
 for path in paths:
     print("Applying SFW to " + os.path.split(path)[-1])
     param_dict = json_to_dict(path)
     lam, ideal = meta_param_dict["lambda"], meta_param_dict["ideal"]
-
-    if ideal:
-        N, src, ampl = param_dict["N"], param_dict["image_pos"], param_dict["ampl"]
-        s = SFW(y=(ampl, src), mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=lam)
-        measurements = s.y.copy()
+    fs = meta_param_dict["fs"]
+    ms = meta_param_dict.get("mic_size")
+    if ms is not None:  # overwrite the microphone positions
+        mic_pos = load_antenna(mic_size=ms)
     else:
-        # translating the microphones back to their original positions
-        param_dict["mic_array"] += param_dict["origin"]
-        # simulate the RIR, the center of the antenna is choosed as the new origin
-        measurements, N, src, ampl, mic_array = simulate_rir(param_dict)
-        s = SFW(y=measurements, mic_pos=param_dict["mic_array"], fs=param_dict["fs"], N=N, lam=lam)
+        mic_pos = param_dict["mic_array"]
 
-    rmax = c * N / param_dict["fs"] + 0.5
+    if ideal:  # exact theoretical observations
+        N, src, ampl = param_dict["N"], param_dict["image_pos"], param_dict["ampl"]
+        s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+        measurements = s.y.copy()
+    else:  # recreation using pyroom acoustics. Caution : the parameters are only taken from the room parameters file
+        # translating the microphones back to their original positions
+        mic_pos += param_dict["origin"]
+        # simulate the RIR, the center of the antenna is choosed as the new origin
+        measurements, N, src, ampl, mic_pos = simulate_rir(param_dict)
+        s = SFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+
+    # maximum reachable distance
+    max_norm = c * N / param_dict["fs"] + 0.5
+    rmax = meta_param_dict.get("rmax", max_norm)
 
     grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
                                                   meta_param_dict["dphi"], meta_param_dict["dphi"])
-
     # file name without extension
     file_ind = os.path.splitext((os.path.split(path)[-1]))[0]
     curr_save_path = os.path.join(save_path, file_ind)
@@ -65,11 +75,11 @@ for path in paths:
 
     normalization = meta_param_dict["normalization"]
     min_norm = meta_param_dict["min_norm"]
-
+    spherical_search = meta_param_dict.get("spherical_search", 0)
     stdout = sys.stdout
     sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
-    a, x = s.reconstruct(grid=grid, niter=8, min_norm=min_norm, max_norm=rmax, max_ampl=200,
-                         normalization=normalization, spike_merging=False,
+    a, x = s.reconstruct(grid=grid, niter=8, min_norm=min_norm, max_norm=max_norm, max_ampl=200,
+                         normalization=normalization, spike_merging=False, spherical_search=spherical_search,
                          use_hard_stop=True, verbose=True, rough_search=True)
 
     reconstr_rir = s.gamma(a, x)
@@ -101,7 +111,8 @@ for path in paths:
         plt.plot(reconstr_rir / np.max(reconstr_rir), label="reconstructed rir")
         plt.legend()
         plt.show()
-        plot_room(mic_array, src, ampl, x)
+        plot_room(mic_pos, src, ampl, x)
 
     if curr_save_path.endswith("_param"):
         curr_save_path = curr_save_path[:-6] + "_res.json"
+print("total execution time : {} s".format(time.time() - tstart))

@@ -10,6 +10,10 @@ sfw_tol = 1e-6
 merge_tol = 0.02
 
 
+def flat_to_multi_ind(ind, N):
+    return ind // N, ind % N
+
+
 class SFW:
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
                  fs: float, N: int, lam: float = 1e-2):
@@ -48,7 +52,7 @@ class SFW:
 
         self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
                             'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
-        self.eta = None
+        self.eta, self.eta_jac = None, None
         self.timer = None
 
     def sinc_filt(self, t):
@@ -57,6 +61,13 @@ class SFW:
         """
 
         return np.sinc(t * self.fs)
+
+    def sinc_der(self, t):
+        """
+        Derivate of the filter
+        """
+        w = np.pi*self.fs
+        return (t*np.cos(w*t) - np.sin(w*t)/w) / (t**2+np.finfo(float).eps)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         """
@@ -98,6 +109,72 @@ class SFW:
                   / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def _jac_etak(self, x):
+        diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
+        # distances from in to every microphone, shape (M,)
+        dist = np.sqrt(np.sum(diff ** 2, axis=1))
+
+        int_term = self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c  # shape (M, N)
+
+        # sum shape (M,  N) into shape (M,), derivate without the xk_i - xm_i factor
+        tens = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
+                      / dist[:, np.newaxis]**2 / 4 / np.pi) * self.res.reshape(self.M, self.N), axis=1)
+
+        # shape (M,3) into (M,)
+        jac = (np.sum(tens[:, np.newaxis] * diff, axis=0).flatten())
+
+        return -jac*np.sign(self.etak(x)) / self.lam
+
+    def _jac_etak_norm1(self, x):
+        diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
+        # distances from in to every microphone, shape (M,)
+        dist = np.sqrt(np.sum(diff ** 2, axis=1))
+
+        int_term = self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c  # shape (M, N)
+
+        norm2 = np.sum(1/dist**2)
+        norm = np.sqrt(norm2)  # float
+        norm_der = - np.sum(diff/dist[:, np.newaxis]**4, axis=0) / norm  # shape (3,)
+
+        # sum shape (M,  N) into shape (M,), derivate  of gammaj * N without the xk_i - xm_i factor
+        der_gam = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
+                         / dist[:, np.newaxis]**2 / 4 / np.pi / norm) * self.res.reshape(self.M, self.N), axis=1)
+        der_gam = (np.sum(der_gam[:, np.newaxis] * diff, axis=0).flatten())  # shape (3,)
+
+        # derivate of N * gammaj without the xk_i - xm_i factor
+        der_N = (np.sum((- self.sinc_filt(int_term) / dist[:, np.newaxis] / 4 / np.pi).flatten() * self.res)
+                 * norm_der / norm2)  # shape (3,)
+
+        return -np.sign(self.etak_norm1(x))*(der_gam + der_N) / self.lam
+
+    def _jac_slide_obj(self, var):
+        a, x = var[:self.nk], var[self.nk:].reshape(-1, self.d)
+        diff = x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]  # difference, shape (M, K, 3)
+        # distances from the diracs contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum(diff ** 2, axis=2))
+
+        jac = np.zeros(self.nk*4)
+
+        int_term = self.NN[np.newaxis, np.newaxis, :] / self.fs - dist[:, :, np.newaxis] / c
+        # shape (M, K, N) = gamma_j(x_k)
+        gamma_tens = (self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis])
+
+        # sum_k ak.gamma_j(x_k) - y_j : sum(M, K, N, axis=1) - y = -residue
+        residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - self.y)
+        # derivates in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
+        jac[:self.nk] = (np.sum(residue.reshape(self.M, self.N)[:, np.newaxis, :] * gamma_tens, axis=(0, 2))
+                         + self.lam*np.sign(a))
+
+        # shape (M, K, N), derivate without the xk_i - xm_i factor
+        gamma_tens = ((- gamma_tens - self.sinc_der(int_term) / 4 / np.pi / c)
+                      / dist[:, :, np.newaxis]**2 * residue.reshape(self.M, self.N)[:, np.newaxis, :])
+
+        # original shape (M,K,3,N)
+        jac[self.nk:] = (np.repeat(a, 3)
+                         * np.sum(gamma_tens[:, :, np.newaxis, :] * diff[:, :, :, np.newaxis], axis=(0, 3)).flatten())
+
+        return jac
 
     def _create_gamma_mat(self, x):
         """
@@ -166,7 +243,7 @@ class SFW:
         return tot_merged
 
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
-                    rough_search=False, spike_merging=False,
+                    rough_search=False, spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the the measure based on the measurements self.y.
@@ -188,12 +265,16 @@ class SFW:
             -xk is a (K, d) shaped array containing the locations of the K spikes composing the measure
         """
         self.timer = time.time()
-        normalizations = [self.etak, self.etak_norm1]
+        normalizations, normalizations_jac = [self.etak, self.etak_norm1], [self._jac_etak, self._jac_etak_norm1]
         self.eta = normalizations[normalization]
+        self.eta_jac = normalizations_jac[normalization]
 
         xmin, xmax = -max_norm, max_norm
         amin, amax = 0, max_ampl
         self.nk = 0
+
+        search_grid = grid
+        assert search_grid is not None, "a grid must be specified for the initial grid search"
 
         for i in range(niter):
 
@@ -201,8 +282,13 @@ class SFW:
             if verbose:
                 print("Optimizing for spike position -----")
 
-            # grid search : one optimization per grid point (the grid has the shape (N, d))
+            # grid search : one optimization per grid point (the grid has the shape (Ngrid, d))
             tstart = time.time()
+
+            if spherical_search == 1:  # take argmax on the complete rir and search on the corresponding sphere
+                m_max, n_max = flat_to_multi_ind(np.argmax(self.res), self.N)
+                r = n_max * c / self.fs
+                search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
 
             if verbose:
                 print("Starting a grid search to minimize etak")
@@ -213,7 +299,7 @@ class SFW:
             # spreading the loop over multiple processors
             ncores = multiprocessing.cpu_count()
             p = multiprocessing.Pool(ncores)
-            gr_opt = p.map(self._optigrid, grid)
+            gr_opt = p.map(self._optigrid, search_grid)
             p.close()
 
             # searching for the best result over the grid
@@ -261,13 +347,16 @@ class SFW:
             if verbose:
                 print("Optimizing for spike amplitudes --------")
 
+            tstart = time.time()
+
             lasso_fitter = Lasso(alpha=self.lam, positive=True)
             gamma_mat = self._create_gamma_mat(self.xkp)
             lasso_fitter.fit(np.sqrt(self.J) * gamma_mat,
                              np.sqrt(self.J) * self.y)
             ak_new = lasso_fitter.coef_.flatten()
             if verbose:
-                print("LASSO solved in {} iterations".format(lasso_fitter.n_iter_))
+                print("LASSO solved in {} iterations, exec time : {} s".format(lasso_fitter.n_iter_,
+                                                                               time.time() - tstart))
                 print("New amplitudes : {} \n".format(ak_new))
 
             # solve to adjust both the positions and amplitudes
@@ -276,8 +365,10 @@ class SFW:
             if verbose:
                 print("Sliding step --------")
                 print("initial value : {}".format(self._obj_slide(ini)))
+
+            tstart = time.time()
             bounds = [(amin, amax)] * self.nk + [(xmin, xmax)] * self.nk * self.d
-            opti_res = minimize(self._obj_slide, ini, jac="3-point", method="L-BFGS-B", bounds=bounds)
+            opti_res = minimize(self._obj_slide, ini, jac=self._jac_slide_obj, method="L-BFGS-B", bounds=bounds)
             mk = opti_res.x
             self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
 
@@ -285,7 +376,8 @@ class SFW:
                 print("Last optimization failed, reason : {}".format(opti_res.message))
 
             if verbose:
-                print("Optimization converged in {} iterations".format(opti_res.nit))
+                print("Optimization converged in {} iterations, exec time : {} s".format(opti_res.nit,
+                                                                                         time.time() - tstart))
                 print("Objective value : {}".format(opti_res.fun))
 
             # deleting null amplitude spikes

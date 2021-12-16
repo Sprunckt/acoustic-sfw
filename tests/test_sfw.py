@@ -11,6 +11,13 @@ def gammaj(x, fs, n, posm, filt):
     return filt(n / fs - dist / c) / 4 / np.pi / dist
 
 
+def gammaj_der(x, fs, n, posm, filt, filt_der):
+    dist = np.linalg.norm(x - posm)
+    diff = x - posm
+    int_term = n/fs - dist/c
+    return diff * (-dist*filt_der(int_term)/c - filt(int_term)) / 4 / np.pi / dist**3
+
+
 def plain_gamma(a, x, fs, N, mic_pos, filt):
     n_spikes = len(a)
     M = len(mic_pos)
@@ -31,6 +38,35 @@ def plain_eta(r, res, fs, N, mic_pos, filt):
         for n in range(N):
             y[m, n] = gammaj(r, fs, n, mic_pos[m], filt)
     return np.sum(res * y.flatten())
+
+
+def plain_slide_jac(a, x, y, fs, N, mic_pos, filt, filt_der, lam):
+    K, M = len(a), len(mic_pos)
+    jac = np.zeros(4*K)
+    residue = plain_gamma(a, x, fs, N, mic_pos, filt) - y
+    for k in range(K):  # derivate in ak
+        for m in range(M):
+            for n in range(N):
+                jac[k] += gammaj(x[k], fs, n, mic_pos[m], filt) * residue[m*N + n]
+        jac[k] += lam*np.sign(a[k])
+    for k in range(K):  # derivate in xk
+        main_term = np.zeros(3)
+        for m in range(M):
+            for n in range(N):
+                main_term += gammaj_der(x[k], fs, n, mic_pos[m], filt, filt_der) * residue[m*N + n]
+        jac[K + 3*k: K + 3*(k+1)] = a[k] * main_term
+
+    return jac
+
+
+def plain_eta_jac(x, res, fs, N, mic_pos, filt, filt_der, lam):
+    M = len(mic_pos)
+    jac = np.zeros(3)
+    for m in range(M):
+        for n in range(N):
+            jac += gammaj_der(x, fs, n, mic_pos[m], filt, filt_der) * res[m*N + n]
+    jac = - jac * np.sign(plain_eta(x, res, fs, N, mic_pos, filt))
+    return jac / lam
 
 
 class TestGamma(unittest.TestCase):
@@ -89,8 +125,6 @@ class TestEta(unittest.TestCase):
 
         sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
 
-        import time
-
         grid, sph_grid, n_per_sphere = create_grid_spherical(1.124, 3, 0.541, 47, 47, verbose=False)
 
         # check that the vectorized code matches the explicit formula
@@ -101,6 +135,69 @@ class TestEta(unittest.TestCase):
             for r in grid:
                 self.assertAlmostEqual(sfw.etak(r.flatten()),
                                        -np.abs(plain_eta(r, res, fs, N1, mic_array1, sfw.sinc_filt)) / sfw.lam)
+
+    def test_jac_slide(self):
+        mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
+        fs = 4000
+        origin = np.array([0.89, 1, 1.1])
+        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
+                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw.nk = 5  # number of sources considered
+
+        # point used for comparison
+        var = np.arange(1, sfw.nk*4 + 1)
+
+        sfw_jac = sfw._jac_slide_obj(var)
+        plain_jac = plain_slide_jac(var[:sfw.nk], var[sfw.nk:].reshape(sfw.nk, 3),
+                                    y=sfw.y, fs=fs, N=N1, mic_pos=sfw.mic_pos,
+                                    filt=sfw.sinc_filt, filt_der=sfw.sinc_der, lam=sfw.lam)
+        for t in range(4*sfw.nk):
+            self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
+
+    def test_jac_eta1(self):
+        """Test compliance to the plain written eta jacobian without normalization"""
+        mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
+        fs = 4000
+        origin = np.array([0.89, 1, 1.1])
+        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
+                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw.nk = 5  # number of sources considered
+
+        # point used for comparison
+        lvar = [np.arange(1, 4), np.array([0.321, -4, -1.342])]
+        for var in lvar:
+            sfw_jac = sfw._jac_etak(var)
+            plain_jac = plain_eta_jac(var, res=sfw.y, fs=fs, N=N1, mic_pos=sfw.mic_pos,
+                                      filt=sfw.sinc_filt, filt_der=sfw.sinc_der, lam=sfw.lam)
+            for t in range(3):
+                self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
+
+    def test_jac_eta_norm1(self):
+        """Test compliance to the plain written eta jacobian without normalization"""
+        mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
+        fs = 4000
+        origin = np.array([0.89, 1, 1.1])
+        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
+                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw.nk = 5  # number of sources considered
+
+        # point used for comparison
+        lvar = [np.arange(1, 4), np.array([0.321, -4, -1.342])]
+        for var in lvar:
+            sfw_jac = sfw._jac_etak(var)
+            plain_jac = plain_eta_jac(var, res=sfw.y, fs=fs, N=N1, mic_pos=sfw.mic_pos,
+                                      filt=sfw.sinc_filt, filt_der=sfw.sinc_der, lam=sfw.lam)
+            for t in range(3):
+                self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
 
 
 if __name__ == '__main__':
