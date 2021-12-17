@@ -2,7 +2,7 @@ from src.sfw import SFW
 import numpy as np
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
-                                  json_to_dict, correlation, unique_matches)
+                                  json_to_dict, correlation, unique_matches, dict_to_json)
 from src.visualization import plot_room
 from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
@@ -43,22 +43,35 @@ for path in paths:
     if ms is not None:  # overwrite the microphone positions
         mic_pos = load_antenna(mic_size=ms)
     else:
+        ms = param_dict["mic_size"]
         mic_pos = param_dict["mic_array"]
 
-    if fs != param_dict["fs"]:
-        N = int(np.floor(param_dict["N"]*fs / param_dict["fs"]))
-        param_dict["fs"] = fs
-    else:
-        N = param_dict["N"]
+    use_two_antennas = meta_param_dict.get("use_two_antennas", False)
+    if use_two_antennas:
+        normal_antenna = load_antenna(mic_size=ms)
+        antenna_rad = np.linalg.norm(normal_antenna[0])
+        rescaled_antenna, antenna_rad = normal_antenna*ms, antenna_rad*ms  # rescale the antenna to correct size
+        half_sep = (antenna_rad + 0.1)*np.array([1., 0, 0])  # half separation between the antennas
+        mic_pos = np.concatenate([rescaled_antenna - half_sep, rescaled_antenna + half_sep], axis=0)
+
+    sim_dict = dict()
+    sim_dict["fs"] = fs
+    sim_dict["room_dim"] = param_dict["room_dim"]
+    sim_dict["src_pos"] = param_dict["src_pos"]
+
+    # translate the microphones back to their original positions
+    mic_pos += param_dict["origin"]
+    sim_dict["mic_array"] = mic_pos
+    sim_dict["origin"] = param_dict["origin"]
+    sim_dict["max_order"] = meta_param_dict["max_order"]
+
+    # simulate the RIR, the center of the antenna is chosen as the new origin
+    measurements, N, src, ampl, mic_pos = simulate_rir(sim_dict)
+
     if ideal:  # exact theoretical observations
-        src, ampl = param_dict["image_pos"], param_dict["ampl"]
         s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
         measurements = s.y.copy()
     else:  # recreation using pyroom acoustics. Caution : the parameters are only taken from the room parameters file
-        # translating the microphones back to their original positions
-        mic_pos += param_dict["origin"]
-        # simulate the RIR, the center of the antenna is choosed as the new origin
-        measurements, N, src, ampl, mic_pos = simulate_rir(param_dict)
         s = SFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
     # maximum reachable distance
@@ -72,6 +85,7 @@ for path in paths:
     curr_save_path = os.path.join(save_path, file_ind)
 
     if curr_save_path.endswith("_param"):
+        dist_path = curr_save_path[:-6] + "_dist.json"
         res_path = curr_save_path[:-6] + "_res.json"
         out_path = curr_save_path[:-6] + ".out"
     else:
@@ -84,7 +98,8 @@ for path in paths:
     stdout = sys.stdout
 
     sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
-    a, x = s.reconstruct(grid=grid, niter=8, min_norm=min_norm, max_norm=max_norm, max_ampl=200,
+    a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
+                         max_ampl=200,
                          normalization=normalization, spike_merging=False, spherical_search=spherical_search,
                          use_hard_stop=True, verbose=True, rough_search=True)
 
@@ -93,6 +108,10 @@ for path in paths:
     print("source matching and distances : \n", ind, dist)
     max_dist_global = np.max(dist)
 
+    dist_dic = dict()
+    dist_dic["distances"], dist_dic["matching"], dist_dic["reconstr_pos"], dist_dic["image_pos"] = dist, ind, x, src
+
+    dict_to_json(dist_dic, dist_path)
     save_results(res_path, src, ampl, x, a,
                  measurements, reconstr_rir, N, rmax)
 
