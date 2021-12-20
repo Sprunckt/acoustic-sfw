@@ -277,7 +277,6 @@ class SFW:
         assert search_grid is not None, "a grid must be specified for the initial grid search"
 
         for i in range(niter):
-
             # find argmax etak to get the new spike position (step 3)
             if verbose:
                 print("Optimizing for spike position -----")
@@ -390,7 +389,7 @@ class SFW:
             if self.nk == 0:
                 print("Error : all spikes are null")
                 return
-            elif early_stopping and len(ind_null) == 1 and ind_null[0] == len(self.ak):  # last spike is null
+            elif early_stopping and len(ind_null) == 1 and ind_null[0] == len(self.ak) - 1:  # last spike is null
                 print("Last spike has null amplitude, stopping")
                 return self._stop(verbose=verbose)
 
