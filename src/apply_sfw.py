@@ -72,7 +72,7 @@ if __name__ == "__main__":
         if ideal:  # exact theoretical observations
             s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
             measurements = s.y.copy()
-        else:  # recreation using pyroom acoustics. Caution : the parameters are only taken from the room parameters file
+        else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
             s = SFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
         # maximum reachable distance
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
-                             use_hard_stop=True, verbose=True, rough_search=True)
+                             use_hard_stop=True, verbose=True, rough_search=True, early_stopping=True)
 
         reconstr_rir = s.gamma(a, x)
         ind, dist = compare_arrays(x, src)

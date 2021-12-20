@@ -370,14 +370,14 @@ class SFW:
             tstart = time.time()
             bounds = [(amin, amax)] * self.nk + [(xmin, xmax)] * self.nk * self.d
             opti_res = minimize(self._obj_slide, ini, jac=self._jac_slide_obj, method="L-BFGS-B", bounds=bounds)
-            mk = opti_res.x
+            mk, nit_slide = opti_res.x, opti_res.nit
             self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
 
             if not opti_res.success:
                 print("Last optimization failed, reason : {}".format(opti_res.message))
 
             if verbose:
-                print("Optimization converged in {} iterations, exec time : {} s".format(opti_res.nit,
+                print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
                                                                                          time.time() - tstart))
                 print("Objective value : {}".format(opti_res.fun))
 
@@ -389,7 +389,8 @@ class SFW:
             if self.nk == 0:
                 print("Error : all spikes are null")
                 return
-            elif early_stopping and len(ind_null) == 1 and ind_null[0] == len(self.ak) - 1:  # last spike is null
+            # last spike is null and no changes in the sliding step
+            elif early_stopping and ind_null.sum() == 1 and ind_null[-1] and nit_slide <= 1:
                 print("Last spike has null amplitude, stopping")
                 return self._stop(verbose=verbose)
 
