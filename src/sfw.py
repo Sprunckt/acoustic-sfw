@@ -362,16 +362,25 @@ class SFW:
 
             # solve to adjust both the positions and amplitudes
             ini = np.concatenate([ak_new, self.xkp.flatten()])
+            ini_val = self._obj_slide(ini)
 
             if verbose:
                 print("Sliding step --------")
-                print("initial value : {}".format(self._obj_slide(ini)))
+                print("initial value : {}".format(ini_val))
 
             tstart = time.time()
             bounds = [(amin, amax)] * self.nk + [(xmin, xmax)] * self.nk * self.d
             opti_res = minimize(self._obj_slide, ini, jac=self._jac_slide_obj, method="L-BFGS-B", bounds=bounds)
-            mk, nit_slide = opti_res.x, opti_res.nit
-            self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
+            mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
+            decreased_energy = val_fin < ini_val
+
+            # use the new measure if the sliding step decreased the energy, else keep the old values
+            if decreased_energy:
+                self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
+            else:
+                if verbose:
+                    print("Energy increased, ignoring this step")
+                self.ak, self.xk = ak_new, self.xkp
 
             if not opti_res.success:
                 print("Last optimization failed, reason : {}".format(opti_res.message))
@@ -379,7 +388,7 @@ class SFW:
             if verbose:
                 print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
                                                                                          time.time() - tstart))
-                print("Objective value : {}".format(opti_res.fun))
+                print("Objective value : {}".format(val_fin))
 
             # deleting null amplitude spikes
             ind_null = np.asarray(np.abs(self.ak) < sfw_tol)
@@ -389,8 +398,9 @@ class SFW:
             if self.nk == 0:
                 print("Error : all spikes are null")
                 return
-            # last spike is null and no changes in the sliding step
-            elif early_stopping and ind_null.sum() == 1 and ind_null[-1] and nit_slide <= 1:
+            # last spike is null and minor changes from the previous iteration at the sliding step
+            elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
+                  and (nit_slide == 1 or not decreased_energy)):
                 print("Last spike has null amplitude, stopping")
                 return self._stop(verbose=verbose)
 
