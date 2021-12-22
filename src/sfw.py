@@ -329,7 +329,7 @@ class TimeDomainSFW(SFW):
 
         self.J = self.M * self.N
 
-        super().__init__(y=y, fs=fs, lam=lam) # getting attributes and methods from aprent class
+        super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
 
         assert self.y.size == self.J, "invalid measurements length"
 
@@ -463,4 +463,94 @@ class TimeDomainSFW(SFW):
         normalized_eta = [self.etak, self.etak_norm1][normalization]
         normalized_eta_jac = [self._jac_etak, self._jac_etak_norm1][normalization]
         slide_jac = self._jac_slide_obj
+        return normalized_eta, normalized_eta_jac, slide_jac
+
+
+class FrequencyDomainSFW(SFW):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], rir: np.ndarray, N: int,
+                 mic_pos: np.ndarray, freq_array: np.ndarray, fs: float, lam: float = 1e-2):
+        """
+        Args:
+            -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
+        amplitudes and positions of the measure that has to be reconstructed. In that last case the ideal observations
+        are computed.
+            -mic_pos (ndarray) : positions of the microphones (shape (M,d))
+            -fs (float) : sampling frequency
+            -N (int) : number of time samples
+            -lam (float) : penalization parameter of the BLASSO.
+        """
+        self.freq_array = freq_array
+        # creating a time sfw object to compute the residual on the RIR (used for grid initialization)
+        self.time_sfw = TimeDomainSFW(y=rir, mic_pos=mic_pos, fs=fs, N=N)
+        self.mic_pos, self.M = mic_pos, len(mic_pos)
+
+        self.d = mic_pos.shape[1]
+        assert 1 < self.d < 4, "Invalid dimension d"
+
+        self.N = len(freq_array)
+        self.J = self.M * self.N
+
+        super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
+
+        assert self.y.size == self.J, "invalid measurements length"
+
+    def sinc_hat(self, w):
+        return 1.*(np.abs(w) < self.fs/2.)
+
+    def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # sum( M, K, N, axis=1)
+        return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
+                      * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
+                      / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]
+                      * a[np.newaxis, :, np.newaxis], axis=1).flatten()
+
+    def _create_gamma_mat(self, x):
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # shape (M, N, K) -> (J, K)
+        return np.reshape(np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
+                          * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
+                          / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]).flatten(), newshape=(self.J, -1))
+
+    def etak(self, x: np.ndarray) -> float:
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
+                  * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
+                  / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]).flatten()
+
+        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def etak_norm1(self, x: np.ndarray) -> float:
+        """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
+                  * np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
+                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis] / np.linalg.norm(1/dist)).flatten()
+
+        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def _grid_initialization_function(self, grid, verbose):
+        # compute the time domain residue
+        self.time_sfw.res = self.time_sfw.y - self.time_sfw.gamma(self.ak, self.xk)
+        m_max, n_max = flat_to_multi_ind(np.argmax(self.time_sfw.res), self.N)
+        r = n_max * c / self.fs
+        search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
+        if verbose:
+            print("searching around mic {} at a radius {}".format(m_max, r))
+        return search_grid
+
+    def _get_normalized_fun(self, normalization):
+        normalized_eta = [self.etak, self.etak_norm1][normalization]
+        normalized_eta_jac = "3-point"
+        slide_jac = "3-point"
         return normalized_eta, normalized_eta_jac, slide_jac
