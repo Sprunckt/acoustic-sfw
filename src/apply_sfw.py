@@ -1,4 +1,4 @@
-from src.sfw import SFW
+from src.sfw import TimeDomainSFW
 import numpy as np
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
@@ -70,10 +70,10 @@ if __name__ == "__main__":
         measurements, N, src, ampl, mic_pos = simulate_rir(sim_dict)
 
         if ideal:  # exact theoretical observations
-            s = SFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+            s = TimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
             measurements = s.y.copy()
         else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
-            s = SFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+            s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
         # maximum reachable distance
         max_norm = c * N / param_dict["fs"] + 0.5

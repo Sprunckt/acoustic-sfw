@@ -8,7 +8,7 @@ import numpy as np
 import pyroomacoustics as pra
 from src.simulation.utils import (multichannel_rir_to_vec, vec_to_rir, create_grid_spherical,
                                   compare_arrays)
-from src.sfw import SFW
+from src.sfw import TimeDomainSFW
 
 # Scene Parameters
 room_dim = [4, 6, 3.2]
@@ -77,7 +77,7 @@ if plot_sources:
 grid, sph_grid, n_sph = create_grid_spherical(1, 15, 0.3, 25, 25)
 print("grid shape : ", grid.shape)
 
-s = SFW(measurements/np.max(measurements), mic_pos=mic_array, fs=freq_sampling, N=N, lam=1e-2)
+s = TimeDomainSFW(measurements / np.max(measurements), mic_pos=mic_array, fs=freq_sampling, N=N, lam=1e-2)
 
 plot_rir = False
 if plot_rir:  # plot the simulated RIR and the RIR computed using the measure gamma and the real source positions

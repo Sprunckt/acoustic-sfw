@@ -10,7 +10,7 @@ import sys
 from src.simulation.utils import (create_grid_spherical,
                                   compare_arrays, c, save_results, dict_to_json)
 from src.simulation.simulate_pra import load_antenna, simulate_rir
-from src.sfw import SFW
+from src.sfw import TimeDomainSFW
 
 tol_recov = 2e-2
 
@@ -132,7 +132,7 @@ for i in range(new_exp):
 
         measurements = measurements/np.max(measurements)
         # applying the algorithm
-        s = SFW(measurements, mic_pos=mic_array, fs=fs, N=N, lam=1e-2)
+        s = TimeDomainSFW(measurements, mic_pos=mic_array, fs=fs, N=N, lam=1e-2)
 
         stdout = sys.stdout
         sys.stdout = open(os.path.join(directory, str_id + ".out"), 'w')  # redirecting stdout to capture the prints

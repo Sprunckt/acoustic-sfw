@@ -80,7 +80,7 @@ class TestGamma(unittest.TestCase):
                            room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
 
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=16000, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=16000, N=N1)
 
         # check that the vectorized code matches the PRA simulations
         reconstr_rir = sfw.gamma(ampl1, src1)
@@ -99,7 +99,7 @@ class TestGamma(unittest.TestCase):
         param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1.754201, 9.2114, 0.51213],
                            room_dim=[3, 13.2, 1.5], fs=fs, max_order=2, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
 
         # check that the vectorized code matches the PRA simulations
         reconstr_rir = sfw.gamma(ampl1, src1)
@@ -123,7 +123,7 @@ class TestEta(unittest.TestCase):
                            room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
 
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
 
         grid, sph_grid, n_per_sphere = create_grid_spherical(1.124, 3, 0.541, 47, 47, verbose=False)
 
@@ -144,7 +144,7 @@ class TestEta(unittest.TestCase):
                            room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
 
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
 
         # point used for comparison
@@ -166,7 +166,7 @@ class TestEta(unittest.TestCase):
                            room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
 
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
 
         # point used for comparison
@@ -187,7 +187,7 @@ class TestEta(unittest.TestCase):
                            room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
         measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
 
-        sfw = src.sfw.SFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
 
         # point used for comparison
