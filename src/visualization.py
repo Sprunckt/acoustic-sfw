@@ -94,10 +94,10 @@ def plot_room(mic, src, ampl, reconstr_src):
             ax.plot3D([x1, x2], [y1, y2], [z1, z2], color='k')
 
     ax.scatter(mic[:, 0], mic[:, 1], mic[:, 2], label='microphones', marker='+')
-    ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
-               marker='X', alpha=0.7, s=3, color='blue')
     ax.scatter(reconstr_src[:, 0], reconstr_src[:, 1], reconstr_src[:, 2], label='reconstructed sources',
-               marker='o',  edgecolor='k')
+               marker='o',  s=50, alpha=0.3, edgecolor='k', color='red')
+    ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
+               marker='D', alpha=1, s=5, color='blue')
     plt.legend()
     plt.show()
 
