@@ -129,7 +129,7 @@ class SFW(ABC):
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     use_eta_jac=False, use_slide_jac=True) -> (np.ndarray, np.ndarray):
         """
-        Apply the SFW algorithm to reconstruct the the measure based on the measurements self.y.
+        Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
         Args:
             -grid (array) : grid used for the initial guess of the new spike
@@ -331,7 +331,7 @@ class TimeDomainSFW(SFW):
 
         super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
 
-        assert self.y.size == self.J, "invalid measurements length"
+        assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
 
     def sinc_filt(self, t):
         """
@@ -467,8 +467,8 @@ class TimeDomainSFW(SFW):
 
 
 class FrequencyDomainSFW(SFW):
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], rir: np.ndarray, N: int,
-                 mic_pos: np.ndarray, freq_array: np.ndarray, fs: float, lam: float = 1e-2):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -479,29 +479,35 @@ class FrequencyDomainSFW(SFW):
             -N (int) : number of time samples
             -lam (float) : penalization parameter of the BLASSO.
         """
-        self.freq_array = freq_array
+
         # creating a time sfw object to compute the residual on the RIR (used for grid initialization)
-        self.time_sfw = TimeDomainSFW(y=rir, mic_pos=mic_pos, fs=fs, N=N)
+        self.time_sfw = TimeDomainSFW(y=y, mic_pos=mic_pos, fs=fs, N=N)
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
         self.d = mic_pos.shape[1]
         assert 1 < self.d < 4, "Invalid dimension d"
 
-        self.N = len(freq_array)
-        self.J = self.M * self.N
+        # array of observed frequencies
+        self.freq_array = np.fft.rfftfreq(N, d=1./fs)*2*np.pi
 
-        super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
+        self.N, self.N_freq = N, len(self.freq_array)
 
-        assert self.y.size == self.J, "invalid measurements length"
+        self.J = self.M * self.N_freq
+
+        # compute the FFT of the rir, divide by the normalization constant
+        y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.N),
+                             axis=-1).flatten() / np.sqrt(2*np.pi)
+
+        super().__init__(y=y_freq, fs=fs, lam=lam)  # getting attributes and methods from parent class
 
     def sinc_hat(self, w):
-        return 1.*(np.abs(w) < self.fs/2.)
+        return 1.*(np.abs(w) <= self.fs*np.pi)  # no 1/fs factor to account for FT approximation with DFT
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
-        # sum( M, K, N, axis=1)
+        # sum( M, K, N_freq, axis=1)
         return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
                       * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
                       / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]

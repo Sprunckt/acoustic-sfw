@@ -200,5 +200,28 @@ class TestEta(unittest.TestCase):
                 self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
 
 
+class TestGammaFreq(unittest.TestCase):
+    """Testing compliance between the DFT of the ideal RIR and the ideal FT model"""
+    def test_gamma1(self):
+        """Testing compliance to PRA simulations"""
+        mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
+        fs = 16000
+        origin = np.array([0.89, 1, 1.1])
+        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
+                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)  # computing the source positions/ampl
+        M = len(mic_array1)
+        sfw = src.sfw.TimeDomainSFW(y=(ampl1, src1), mic_pos=mic_array1, fs=16000, N=N1)
+
+        fft = np.fft.rfft(sfw.y.reshape(M, N1), axis=-1).flatten() / np.sqrt(2*np.pi)
+
+        freq_sfw = src.sfw.FrequencyDomainSFW(y=sfw.y, N=N1, mic_pos=mic_array1, fs=fs)
+        model_ft = freq_sfw.gamma(ampl1, src1)
+
+        # check that the vectorized code matches the PRA simulations
+        diff = np.linalg.norm((fft - model_ft)[:-1])
+        self.assertLessEqual(diff, 0.2)
+
+
 if __name__ == '__main__':
     unittest.main()
