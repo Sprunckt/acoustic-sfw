@@ -518,18 +518,18 @@ class FrequencyDomainSFW(SFW):
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N, K) -> (J, K)
-        return np.reshape(np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                          * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
-                          / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]).flatten(), newshape=(self.J, -1))
+        return np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
+                          * np.exp(-1j*self.freq_array[np.newaxis, :, np.newaxis]*dist[:, np.newaxis, :]/c)
+                          / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis, :], newshape=(self.J, -1))
 
     def etak(self, x: np.ndarray) -> float:
         # distances from x (in R^3) to every microphone, shape (M,)
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                  * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
-                  / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]).flatten()
+        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
+                  * np.exp(-1j*self.freq_array[np.newaxis, :]*dist[:,  np.newaxis]/c)
+                  / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis]).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
 
@@ -539,9 +539,9 @@ class FrequencyDomainSFW(SFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                  * np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
-                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis] / np.linalg.norm(1/dist)).flatten()
+        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
+                  * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
+                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
 
