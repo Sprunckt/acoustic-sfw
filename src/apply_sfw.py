@@ -68,12 +68,20 @@ if __name__ == "__main__":
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
         measurements, N, src, ampl, mic_pos = simulate_rir(sim_dict)
+        domain = meta_param_dict.get("domain")
 
         if ideal:  # exact theoretical observations
-            s = TimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
-            measurements = s.y.copy()
+            if domain == "frequential":
+                s = FrequencyDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+                measurements = s.time_sfw.y.copy()
+            else:
+                s = TimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+                measurements = s.y.copy()
         else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
-            s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+            if domain == "frequential":
+                s = FrequencyDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+            else:
+                s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
         # maximum reachable distance
         max_norm = c * N / param_dict["fs"] + 0.5
