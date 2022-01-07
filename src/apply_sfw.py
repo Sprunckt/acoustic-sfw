@@ -1,4 +1,4 @@
-from src.sfw import TimeDomainSFW
+from src.sfw import TimeDomainSFW, FrequencyDomainSFW
 import numpy as np
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
@@ -27,7 +27,7 @@ else:
     df_res = pd.read_csv(df_path)
 
 # path to the parameter json files used for the simulation
-paths = ["room_db1/exp_{}_param.json".format(i) for i in range(0, 50)]
+paths = ["room_db3/exp_{}_param.json".format(i) for i in range(0, 100)]
 
 # path to a json file containing additional parameters used for all simulations (eg grid spacing)
 meta_param_path = os.path.join(save_path, "parameters.json")
@@ -121,6 +121,10 @@ if __name__ == "__main__":
         dist_dic["distances"], dist_dic["matching"], dist_dic["reconstr_pos"], dist_dic["image_pos"] = dist, ind, x, src
 
         dict_to_json(dist_dic, dist_path)
+
+        if domain == "frequential":
+            measurements = [np.real(measurements).tolist(), np.imag(measurements).tolist()]
+            reconstr_rir = [np.real(reconstr_rir).tolist(), np.imag(reconstr_rir).tolist()]
         save_results(res_path, src, ampl, x, a,
                      measurements, reconstr_rir, N, rmax)
 

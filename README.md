@@ -1,4 +1,4 @@
-#Acoustic Sliding-Frank-Wolfe
+# Acoustic Sliding-Frank-Wolfe
 
 
 To launch a given script, navigate to the project directory and run the script from the command line as a module.
