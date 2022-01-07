@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 from typing import Union, Tuple
 from scipy.optimize import minimize
 from sklearn.linear_model import Lasso
@@ -54,13 +55,10 @@ class SFW(ABC):
         pass
 
     @abstractmethod
-    def _create_gamma_mat(self, x):
+    def _LASSO_step(self) -> Tuple[Lasso, np.ndarray]:
         """
-        Linear operator (M(R^d) -> R^J)
-        Args:
-            -a (array) : flat array containing the amplitudes of the spikes
-            -x (array) : positions of the spikes, shape (len(a), d)
-        Return: array containing the evaluation of gamma on the measure (shape (J,))
+        Performs the lasso step and returns a tuple (lasso_fitter, ak) (the sklearn LASSO object and the ak
+        coefficients)
         """
         pass
 
@@ -127,7 +125,7 @@ class SFW(ABC):
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     rough_search=False, spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
-                    use_eta_jac=False, use_slide_jac=True) -> (np.ndarray, np.ndarray):
+                    use_eta_jac=False, use_slide_jac=True, plot=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -232,12 +230,8 @@ class SFW(ABC):
 
             tstart = time.time()
 
-            lasso_fitter = Lasso(alpha=self.lam, positive=True)
-            gamma_mat = self._create_gamma_mat(self.xkp)
-            scale = np.sqrt(len(self.y))
-            lasso_fitter.fit(scale * gamma_mat,
-                             scale * self.y)
-            ak_new = lasso_fitter.coef_.flatten()
+            lasso_fitter, ak_new = self._LASSO_step()
+
             if verbose:
                 print("LASSO solved in {} iterations, exec time : {} s".format(lasso_fitter.n_iter_,
                                                                                time.time() - tstart))
@@ -301,6 +295,19 @@ class SFW(ABC):
                 disp_measure(self.ak, self.xk)
             gk = self.gamma(self.ak, self.xk)
             self.res = self.y - gk
+            if plot:
+                if self.y.dtype == float:
+                    plt.plot(self.y, "measures")
+                    plt.plot(gk, "current value", '--')
+                    plt.plot(self.res, "residue")
+                else:
+                    fig, ax = plt.subplots(2)
+                    ax[0].set_title("real part"), ax[1].set_title("imaginary part")
+                    ax[0].plot(np.real(self.y)), ax[1].plot(np.imag(self.y), label="measures")
+                    ax[0].plot(np.real(gk), '--'), ax[1].plot(np.imag(gk), '--', label="current")
+                    ax[0].plot(np.real(self.res), '--'), ax[1].plot(np.imag(self.res), '--', label="residue")
+                plt.legend()
+                plt.show()
         print("Maximum number of iterations {} reached".format(niter))
         return self._stop(verbose=verbose)
 
@@ -356,13 +363,19 @@ class TimeDomainSFW(SFW):
                       / 4 / np.pi / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
-    def _create_gamma_mat(self, x):
+    def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
-        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+        dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N, K) -> (J, K)
-        return np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
-                          / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.J, -1))
+        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
+                               / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.J, -1))
+
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * self.y)
+        return lasso_fitter, lasso_fitter.coef_.flatten()
 
     def etak(self, x: np.ndarray) -> float:
         # distances from x (in R^3) to every microphone, shape (M,)
@@ -412,12 +425,12 @@ class TimeDomainSFW(SFW):
         norm = np.sqrt(norm2)  # float
         norm_der = - np.sum(diff/dist[:, np.newaxis]**4, axis=0) / norm  # shape (3,)
 
-        # sum shape (M,  N) into shape (M,), derivate  of gammaj * N without the xk_i - xm_i factor
+        # sum shape (M,  N) into shape (M,), derivative  of gammaj * N without the xk_i - xm_i factor
         der_gam = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
                          / dist[:, np.newaxis]**2 / 4 / np.pi / norm) * self.res.reshape(self.M, self.N), axis=1)
         der_gam = (np.sum(der_gam[:, np.newaxis] * diff, axis=0).flatten())  # shape (3,)
 
-        # derivate of N * gammaj without the xk_i - xm_i factor
+        # derivative of N * gammaj without the xk_i - xm_i factor
         der_N = (np.sum((- self.sinc_filt(int_term) / dist[:, np.newaxis] / 4 / np.pi).flatten() * self.res)
                  * norm_der / norm2)  # shape (3,)
 
@@ -507,31 +520,22 @@ class FrequencyDomainSFW(SFW):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
-        # sum( M, K, N_freq, axis=1)
+        # sum(M, K, N_freq, axis=1)
         return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
                       * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
                       / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
-    def _create_gamma_mat(self, x):
-        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
-        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
-
-        # shape (M, N, K) -> (J, K)
-        return np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
-                          * np.exp(-1j*self.freq_array[np.newaxis, :, np.newaxis]*dist[:, np.newaxis, :]/c)
-                          / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis, :], newshape=(self.J, -1))
-
     def etak(self, x: np.ndarray) -> float:
         # distances from x (in R^3) to every microphone, shape (M,)
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
-        # shape (M, N) to (M*N,)
+        # shape (M, Nfreq) to (M*Nfreq,)
         gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
                   * np.exp(-1j*self.freq_array[np.newaxis, :]*dist[:,  np.newaxis]/c)
                   / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis]).flatten()
 
-        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+        return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
 
     def etak_norm1(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -543,7 +547,27 @@ class FrequencyDomainSFW(SFW):
                   * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
 
-        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+        return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
+
+    def _LASSO_step(self):
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # shape (M, N_freq, K) -> (J, K)
+        gamma_mat_cpx = np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
+                                   * np.exp(-1j*self.freq_array[np.newaxis, :, np.newaxis]*dist[:, np.newaxis, :]/c)
+                                   / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis, :],
+                                   newshape=(self.J, -1))
+
+        gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
+                                    np.imag(gamma_mat_cpx)], axis=0)
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        target = np.concatenate([np.real(self.y), np.imag(self.y)]).reshape(-1, 1)
+        scale = np.sqrt(2*len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * target)
+
+        return lasso_fitter, lasso_fitter.coef_.flatten()
 
     def _grid_initialization_function(self, grid, verbose):
         # compute the time domain residue
@@ -560,3 +584,11 @@ class FrequencyDomainSFW(SFW):
         normalized_eta_jac = "3-point"
         slide_jac = "3-point"
         return normalized_eta, normalized_eta_jac, slide_jac
+
+    def _obj_slide(self, var):
+        """
+        Objective function for the sliding step, adapted for complex values
+        """
+
+        a, x = var[:self.nk], var[self.nk:].reshape(-1, self.d)
+        return 0.5 * np.sum(np.abs(self.gamma(a, x) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
