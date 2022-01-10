@@ -34,7 +34,8 @@ else:  # parameters to configure SFW and the simulations
     param_dict["spherical_search"] = True  # set to True to search on a single sphere (in that case rmax=rmin=1)
     param_dict["mic_size"] = 5.  # overwrite the microphone positions by placing an antenna with the given radius factor
     param_dict["max_iter"] = 8
-    param_dict["use_two_antennas"]= False
+    param_dict["use_two_antennas"] = False
+    param_dict["domain"] = "time"
 
 param_path = os.path.join(directory, "parameters.json")
 if not os.path.exists(param_path):
