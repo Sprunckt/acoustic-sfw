@@ -297,9 +297,9 @@ class SFW(ABC):
             self.res = self.y - gk
             if plot:
                 if self.y.dtype == float:
-                    plt.plot(self.y, "measures")
-                    plt.plot(gk, "current value", '--')
-                    plt.plot(self.res, "residue")
+                    plt.plot(self.y, label="measures")
+                    plt.plot(gk, '--', label="current value")
+                    plt.plot(self.res, label="residue")
                 else:
                     fig, ax = plt.subplots(2)
                     ax[0].set_title("real part"), ax[1].set_title("imaginary part")
@@ -477,6 +477,62 @@ class TimeDomainSFW(SFW):
         normalized_eta_jac = [self._jac_etak, self._jac_etak_norm1][normalization]
         slide_jac = self._jac_slide_obj
         return normalized_eta, normalized_eta_jac, slide_jac
+
+
+class EpsilonTimeDomainSFW(TimeDomainSFW):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
+                 fs: float, N: int, lam: float = 1e-2, eps=1e-3):
+        """
+        Args:
+            -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
+        amplitudes and positions of the measure that has to be reconstructed. In that last case the ideal observations
+        are computed.
+            -mic_pos (ndarray) : positions of the microphones (shape (M,d))
+            -fs (float) : sampling frequency
+            -N (int) : number of time samples
+            -lam (float) : penalization parameter of the BLASSO.
+        """
+        self.eps = eps
+
+        super().__init__(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos)  # getting attributes and methods from parent class
+        temp_sfw = TimeDomainSFW(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos)
+        self.y = temp_sfw.y.copy()  # overwriting measures initialization
+
+    def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # sum( M, K, N, axis=1)
+        return np.sum(self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, :, np.newaxis] / c)
+                      / 4 / np.pi / np.sqrt(dist[:, :, np.newaxis]**2 + self.eps)
+                      * a[np.newaxis, :, np.newaxis], axis=1).flatten()
+
+    def _LASSO_step(self):
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        # shape (M, N, K) -> (J, K)
+        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
+                               / 4 / np.pi / np.sqrt(dist[:, np.newaxis, :]**2 + self.eps), newshape=(self.J, -1))
+
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * self.y)
+        return lasso_fitter, lasso_fitter.coef_.flatten()
+
+    def etak(self, x: np.ndarray) -> float:
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
+                  / 4 / np.pi / np.sqrt(dist[:, np.newaxis]**2 + self.eps)).flatten()
+
+        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+
+    def _get_normalized_fun(self, normalization):
+        return self.etak, "3-point", "3-point"
 
 
 class FrequencyDomainSFW(SFW):

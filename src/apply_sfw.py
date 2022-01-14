@@ -74,6 +74,14 @@ if __name__ == "__main__":
             if domain == "frequential":
                 s = FrequencyDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
                 measurements = s.time_sfw.y.copy()
+            elif domain == "time_epsilon":
+                eps = meta_param_dict.get("eps")
+                if eps is None:
+                    print("epsilon must be provided")
+                    exit(1)
+
+                s = EpsilonTimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam, eps=eps)
+                measurements = s.y.copy()
             else:
                 s = TimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
                 measurements = s.y.copy()
