@@ -1,5 +1,6 @@
-from src.sfw import TimeDomainSFW, FrequencyDomainSFW
+from src.sfw import TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW
 import numpy as np
+from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
                                   json_to_dict, correlation, unique_matches, dict_to_json)
@@ -9,31 +10,37 @@ import os
 import sys
 import pandas as pd
 import time
+
 tol_recov = 2e-2
 
 plot = False
 ideal = True  # if True, use the observation operator to reconstruct the measure, else use a PRA simulation
 
-# directory where the results should be saved
-save_path = "experiments/rdb1b_2"
-if not os.path.exists(save_path):
-    os.mkdir(save_path)
-
-df_path = os.path.join(save_path, "results.csv")
-if not os.path.exists(df_path):
-    df_res = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov", "corr_ampl",
-                                   "min_dist", "max_dist_global", "max_dist", "mean_dist"])
-else:
-    df_res = pd.read_csv(df_path)
+# default directory where the results should be saved (overwritten by command line arguments)
+save_path = "experiments/rdb3_freq/eps_0.01"
 
 # path to the parameter json files used for the simulation
 paths = ["room_db3/exp_{}_param.json".format(i) for i in range(0, 100)]
 
-# path to a json file containing additional parameters used for all simulations (eg grid spacing)
-meta_param_path = os.path.join(save_path, "parameters.json")
-meta_param_dict = json_to_dict(meta_param_path)
-
 if __name__ == "__main__":
+    # if an additionnal argument is given in command line : use it as the experiment directory
+    if len(sys.argv) > 1:
+        save_path = sys.argv[1]
+
+    if not os.path.exists(save_path):
+        os.mkdir(save_path)
+
+    df_path = os.path.join(save_path, "results.csv")
+    if not os.path.exists(df_path):
+        df_res = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov", "corr_ampl",
+                                       "min_dist", "max_dist_global", "max_dist", "mean_dist"])
+    else:
+        df_res = pd.read_csv(df_path)
+
+    # path to a json file containing additional parameters used for all simulations (eg grid spacing)
+    meta_param_path = os.path.join(save_path, "parameters.json")
+    meta_param_dict = json_to_dict(meta_param_path)
+
     tstart = time.time()
     for path in paths:
         print("Applying SFW to " + os.path.split(path)[-1])
@@ -43,17 +50,26 @@ if __name__ == "__main__":
         ms = meta_param_dict.get("mic_size")
         if ms is not None:  # overwrite the microphone positions
             mic_pos = load_antenna(mic_size=ms)
-        else:
+        else:  # use default values
             ms = param_dict["mic_size"]
             mic_pos = param_dict["mic_array"]
 
+        rot = meta_param_dict.get("rotation_mic")
+        if rot is not None:  # overwrite the default rotation
+            rot_mat = Rotation.from_euler("xyz", rot, degrees=True).as_matrix()
+        else:
+            rot_mat = Rotation.from_euler("xyz", param_dict["rotation_mic"], degrees=True).as_matrix()
+
         use_two_antennas = meta_param_dict.get("use_two_antennas", False)
         if use_two_antennas:
-            normal_antenna = load_antenna(mic_size=ms)
-            antenna_rad = np.linalg.norm(normal_antenna[0])
-            rescaled_antenna, antenna_rad = normal_antenna*ms, antenna_rad*ms  # rescale the antenna to correct size
+            antenna1 = load_antenna(mic_size=ms)@ rot_mat
+            antenna2 = antenna1.copy()
+            antenna_rad = np.linalg.norm(antenna1[0])
+
             half_sep = (antenna_rad + 0.1)*np.array([1., 0, 0])  # half separation between the antennas
-            mic_pos = np.concatenate([rescaled_antenna - half_sep, rescaled_antenna + half_sep], axis=0)
+            mic_pos = np.concatenate([antenna1 - half_sep, antenna2 + half_sep], axis=0)
+        else:  # single antenna
+            mic_pos = mic_pos @ rot_mat
 
         sim_dict = dict()
         sim_dict["fs"] = fs
@@ -114,11 +130,23 @@ if __name__ == "__main__":
         spherical_search = meta_param_dict.get("spherical_search", 0)
         stdout = sys.stdout
 
+        # apply a transformation to the room coordinates (done after creating the observations)
+        rot_walls = meta_param_dict.get("rotation_walls")  # overwite the room rotation
+        if rot is None:  # using the rotation specific to the room
+            rot_walls = param_dict.get("rotation_walls")
+
+        rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
+        inv_rot_walls = rot_walls.inv()
+        s.mic_pos = mic_pos @ rot_walls.as_matrix()
+
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
-                             use_hard_stop=True, verbose=True, rough_search=True, early_stopping=True)
+                             use_hard_stop=True, verbose=True, rough_search=True, early_stopping=True, plot=False)
+
+        # reversing the coordinate change
+        x = x @ inv_rot_walls.as_matrix()
 
         reconstr_rir = s.gamma(a, x)
         ind, dist = compare_arrays(x, src)

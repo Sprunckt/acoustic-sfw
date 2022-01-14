@@ -3,6 +3,7 @@ Creating the parameter files for multiple random experiments and launching simul
 """
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 import json
 import pandas as pd
 import os
@@ -120,6 +121,11 @@ for i in range(new_exp):
     str_id = "exp_" + str(exp_id)
     # saving the parameters used to run the simulation and the resulting amplitudes and source positions
     sim_param["mic_size"] = param_dict["mic_size"]
+
+    # generate 3 random angles for random rotations around Ox,Oy,Oz
+    sim_param["rotation_mic"] = Rotation.random().as_euler("xyz", degrees=True)
+    sim_param["rotation_walls"] = Rotation.random().as_euler("xyz", degrees=True)
+
     dict_to_json(sim_param, os.path.join(directory, str_id + "_param.json"))
 
     if reconstruct:
