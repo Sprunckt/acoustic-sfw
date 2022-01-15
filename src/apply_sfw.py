@@ -62,7 +62,7 @@ if __name__ == "__main__":
 
         use_two_antennas = meta_param_dict.get("use_two_antennas", False)
         if use_two_antennas:
-            antenna1 = load_antenna(mic_size=ms)@ rot_mat
+            antenna1 = load_antenna(mic_size=ms) @ rot_mat
             antenna2 = antenna1.copy()
             antenna_rad = np.linalg.norm(antenna1[0])
 
@@ -147,8 +147,9 @@ if __name__ == "__main__":
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
-
+        s.mic_pos = s.mic_pos @ inv_rot_walls.as_matrix()
         reconstr_rir = s.gamma(a, x)
+
         ind, dist = compare_arrays(x, src)
         print("source matching and distances : \n", ind, dist)
         max_dist_global = np.max(dist)
@@ -182,7 +183,7 @@ if __name__ == "__main__":
 
         if plot:
             plt.plot(measurements, label="real rir")
-            plt.plot(reconstr_rir / np.max(reconstr_rir), label="reconstructed rir")
+            plt.plot(reconstr_rir, '--', label="reconstructed rir")
             plt.legend()
             plt.show()
             plot_room(mic_pos, src, ampl, x)
