@@ -215,10 +215,14 @@ def json_to_dict(path, list_to_array=True):
     return dump
 
 
-def save_results(file_name, image_pos, ampl, reconstr_pos, reconstr_ampl, rir, reconstr_rir, N, rmax, **kwargs):
+def save_results(res_path, rir_path, image_pos, ampl, reconstr_pos, reconstr_ampl,
+                 rir, reconstr_rir, N, **kwargs):
     exp_res = dict(image_pos=array_to_list(image_pos), ampl=array_to_list(ampl),
-                   reconstr_pos=array_to_list(reconstr_pos), reconstr_ampl=array_to_list(reconstr_ampl),
-                   rir=array_to_list(rir), reconstr_rir=array_to_list(reconstr_rir), N=N, rmax=rmax)
+                   reconstr_pos=array_to_list(reconstr_pos), reconstr_ampl=array_to_list(reconstr_ampl), N=N)
+    rir_dict = dict(rir=array_to_list(rir), reconstr_rir=array_to_list(reconstr_rir))
     for arg in kwargs:
-        exp_res[arg] = kwargs[arg]
-    dict_to_json(exp_res, file_name)
+        exp_res[arg] = array_to_list(kwargs[arg])
+
+    dict_to_json(exp_res, res_path)
+    dict_to_json(rir_dict, rir_path)
+

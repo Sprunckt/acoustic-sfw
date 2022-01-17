@@ -118,8 +118,8 @@ if __name__ == "__main__":
         curr_save_path = os.path.join(save_path, file_ind)
 
         if curr_save_path.endswith("_param"):
-            dist_path = curr_save_path[:-6] + "_dist.json"
             res_path = curr_save_path[:-6] + "_res.json"
+            rir_path = curr_save_path[:-6] + "_rir.json"
             out_path = curr_save_path[:-6] + ".out"
         else:
             print("invalid path")
@@ -132,9 +132,8 @@ if __name__ == "__main__":
 
         # apply a transformation to the room coordinates (done after creating the observations)
         rot_walls = meta_param_dict.get("rotation_walls")  # overwite the room rotation
-        if rot is None:  # using the rotation specific to the room
+        if rot_walls is None:  # using the rotation specific to the room
             rot_walls = param_dict.get("rotation_walls")
-
         rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
         inv_rot_walls = rot_walls.inv()
         s.mic_pos = mic_pos @ rot_walls.as_matrix()
@@ -155,15 +154,13 @@ if __name__ == "__main__":
         max_dist_global = np.max(dist)
 
         dist_dic = dict()
-        dist_dic["distances"], dist_dic["matching"], dist_dic["reconstr_pos"], dist_dic["image_pos"] = dist, ind, x, src
-
-        dict_to_json(dist_dic, dist_path)
+        dist_dic["distances"], dist_dic["matching"] = dist, ind
 
         if domain == "frequential":
             measurements = [np.real(measurements).tolist(), np.imag(measurements).tolist()]
             reconstr_rir = [np.real(reconstr_rir).tolist(), np.imag(reconstr_rir).tolist()]
-        save_results(res_path, src, ampl, x, a,
-                     measurements, reconstr_rir, N, rmax)
+        save_results(res_path, rir_path, image_pos=src, ampl=ampl, reconstr_pos=x, reconstr_ampl=a,
+                     rir=measurements, reconstr_rir=reconstr_rir, N=N, **dist_dic)
 
         inda, indb, dist = unique_matches(x, src, ampl=a)
         mean_dist = np.mean(dist[dist < tol_recov])
