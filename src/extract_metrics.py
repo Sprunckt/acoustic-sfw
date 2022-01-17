@@ -39,11 +39,13 @@ if __name__ == "__main__":
               "--tol= : absolute tolerance \n")
         sys.exit(1)
 
-    save_path = "metrics.csv"
+    save_path = "."
     plot = False
     tol = 1e-2
     for opt, arg in opts:
-        if opt == '--tol':
+        if opt == '--save_path':
+            save_path = arg
+        elif opt == '--tol':
             tol = float(arg)
 
     path_list = []
@@ -65,22 +67,13 @@ if __name__ == "__main__":
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
 
-            ind, all_dist = compare_arrays(predicted_sources, real_sources)
-
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
-            ind_tol = all_dist < tol
-            mean_tp_dist = all_dist[ind_tol].mean()  # mean distance across True Positives
-
-            ctp = ind_tol.sum()
-            tp += ctp  # positions correctly guessed
-            fp += nb_found - ctp  # positions incorrectly guessed
-            fn += nb_needed - len(np.unique(all_dist[ind_tol]))  # sources not found
-
-            # error on amplitudes, looking only at the True positives with maximum ammplitude
+            # unique matches, looking only at the True positives with maximum amplitude
             inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=reconstr_ampl)
             ind_tol = dist < tol
 
+            mean_tp_dist = dist[ind_tol].mean()  # mean distance across recovered sources
             sorted_ampl_reconstr = reconstr_ampl[inda][ind_tol]
             sorted_ampl_exact = real_ampl[indb][ind_tol]
 
@@ -88,15 +81,20 @@ if __name__ == "__main__":
             correlation_ampl = correlation(sorted_ampl_exact, sorted_ampl_reconstr)
             relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
             # number of distinct recovered sources
-            nb_recov = (dist < tol).sum()
+            ctp = (dist < tol).sum()
+
+            tp += ctp  # positions correctly guessed
+            fp += nb_found - ctp  # positions incorrectly guessed
+            fn += nb_needed - ctp  # sources not found (false negatives)
+
             # mean distance to real sources for the best recovered sources
             mean_recov_dist = dist[dist < tol].mean()
 
-            if nb_recov == nb_needed:  # all sources are retrieved
+            if ctp == nb_needed:  # all sources are retrieved
                 break_dist = np.max(dist)
             else:  # look at the minimal distance for the false negatives
                 break_dist = np.min(dist[dist >= tol])
-            entry = dict(exp_id=i, nb_found=nb_found, nb_recov=nb_recov,
+            entry = dict(exp_id=i, nb_found=nb_found, nb_recov=ctp,
                          mean_tp_dist=mean_tp_dist, mean_recov_dist=mean_recov_dist,  break_dist=break_dist,
                          ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
             exp_df = exp_df.append(entry, ignore_index=True)
@@ -108,6 +106,4 @@ if __name__ == "__main__":
 
         df = df.append(entry, ignore_index=True)
 
-    df.to_csv(save_path)
-
-
+    df.to_csv(os.path.join(save_path, 'metrics.csv'), index=False)
