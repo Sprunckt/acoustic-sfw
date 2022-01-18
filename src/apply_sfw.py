@@ -80,7 +80,14 @@ if __name__ == "__main__":
         mic_pos += param_dict["origin"]
         sim_dict["mic_array"] = mic_pos
         sim_dict["origin"] = param_dict["origin"]
+
+        # maximum order of reflections used
         sim_dict["max_order"] = meta_param_dict["max_order"]
+
+        # choose to apply varying absorption rates or a default rate for each wall
+        use_abs = meta_param_dict.get("use_absorption")
+        if use_abs:
+            sim_dict["absorptions"] = param_dict["absorptions"]
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
         measurements, N, src, ampl, mic_pos = simulate_rir(sim_dict)

@@ -36,6 +36,8 @@ else:  # parameters to configure SFW and the simulations
     param_dict["max_iter"] = 8
     param_dict["use_two_antennas"] = False
     param_dict["domain"] = "time"
+    param_dict["use_absorptions"] = True
+
 
 param_path = os.path.join(directory, "parameters.json")
 if not os.path.exists(param_path):

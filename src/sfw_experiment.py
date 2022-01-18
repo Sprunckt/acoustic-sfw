@@ -126,6 +126,12 @@ for i in range(new_exp):
     sim_param["rotation_mic"] = Rotation.random().as_euler("xyz", degrees=True)
     sim_param["rotation_walls"] = Rotation.random().as_euler("xyz", degrees=True)
 
+    # generate random absorption coefficients
+    abs_coeff = np.random.uniform(0.01, 0.3, size=6)
+    absorptions = dict(north=abs_coeff[0], south=abs_coeff[1], east=abs_coeff[2], west=abs_coeff[3],
+                       floor=abs_coeff[4], ceiling=abs_coeff[5])
+    sim_param["absorptions"] = absorptions
+
     dict_to_json(sim_param, os.path.join(directory, str_id + "_param.json"))
 
     if reconstruct:
