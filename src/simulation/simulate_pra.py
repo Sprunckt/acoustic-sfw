@@ -11,7 +11,7 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
     return np.genfromtxt(file_path, delimiter=', ') * mic_size
 
 
-def simulate_rir(conf_path, save=None):
+def simulate_rir(conf_path, save=None, verbose=False):
     """Simulate a RIR using pyroomacoustics, using the parameters given in a .json configuration file/dictionary of
     parameters.
     The configuration file must contain the following fields :
@@ -21,7 +21,8 @@ def simulate_rir(conf_path, save=None):
         -mic_array (array) : position of every microphone ((M, d) shape)
         -max_order (int) : reflection order
         -origin (list, optional) : new origin for the coordinate system (translates the sources and microphones)
-
+        -absorption (dict, optional) : dictionary containing the absorption rates (floats) for each wall (east, west,
+    north, south, floor and ceiling)
     If save is a string, write the rir, rir length, sources and amplitudes to a file.
     Return :
         -measurements : vector containing every RIR of length N in a sequence
@@ -34,15 +35,26 @@ def simulate_rir(conf_path, save=None):
 
     if type(conf_path) == str:
         param_dict = json_to_dict(conf_path)
+        if verbose:
+            print("Getting parameters from {}".format(conf_path))
     else:
         param_dict = conf_path
 
     room_dim, fs = param_dict["room_dim"], param_dict["fs"]
     max_order = param_dict.get("max_order")
 
-    all_flat_materials = {"east": pra.Material(0.1), "west": pra.Material(0.1),
-                          "north": pra.Material(0.1), "south": pra.Material(0.1),
-                          "ceiling": pra.Material(0.1), "floor": pra.Material(0.1)}
+    absorptions = param_dict.get("absorptions")
+    if absorptions is None:
+        absorptions = {"east": pra.Material(0.1), "west": pra.Material(0.1),
+                       "north": pra.Material(0.1), "south": pra.Material(0.1),
+                       "ceiling": pra.Material(0.1), "floor": pra.Material(0.1)}
+        if verbose:
+            print("Using default absorption rate for each wall")
+    else:
+        for key, val in absorptions.items():  # convert the absorption rates to PRA materials
+            absorptions[key] = pra.Material(val)
+
+    all_flat_materials = absorptions
 
     room = pra.ShoeBox(room_dim, fs=fs,
                        materials=all_flat_materials, max_order=max_order)
