@@ -76,9 +76,10 @@ class TestGamma(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 16000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
+                                                                  max_order=1, origin=origin)
 
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=16000, N=N1)
 
@@ -96,9 +97,11 @@ class TestGamma(unittest.TestCase):
         fs = 4000
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=1.)
         origin = np.array([0.5, 1, 0.89754])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1.754201, 9.2114, 0.51213],
-                           room_dim=[3, 13.2, 1.5], fs=fs, max_order=2, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1.754201, 9.2114, 0.51213],
+                                                                  room_dim=[3, 13.2, 1.5], fs=fs,
+                                                                  max_order=2, origin=origin)
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
 
         # check that the vectorized code matches the PRA simulations
@@ -119,9 +122,10 @@ class TestEta(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 4000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
+                                                                  max_order=1, origin=origin)
 
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
 
@@ -140,9 +144,10 @@ class TestEta(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 4000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
+                                                                  max_order=1, origin=origin)
 
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
@@ -162,9 +167,10 @@ class TestEta(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 4000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5],
+                                                                  fs=fs, max_order=1, origin=origin)
 
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
@@ -183,9 +189,10 @@ class TestEta(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 4000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
+                                                                  max_order=1, origin=origin)
 
         sfw = src.sfw.TimeDomainSFW(y=measurements1, mic_pos=mic_array1, fs=fs, N=N1)
         sfw.nk = 5  # number of sources considered
@@ -207,9 +214,10 @@ class TestGammaFreq(unittest.TestCase):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
         fs = 16000
         origin = np.array([0.89, 1, 1.1])
-        param_dict1 = dict(mic_array=mic_array1 + origin[np.newaxis, :], src_pos=[1, 2., 0.5],
-                           room_dim=[2, 3, 1.5], fs=fs, max_order=1, origin=origin)
-        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(param_dict1)  # computing the source positions/ampl
+
+        measurements1, N1, src1, ampl1, mic_array1 = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
+                                                                  src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
+                                                                  max_order=1, origin=origin)
         M = len(mic_array1)
         sfw = src.sfw.TimeDomainSFW(y=(ampl1, src1), mic_pos=mic_array1, fs=16000, N=N1)
 

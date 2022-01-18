@@ -90,7 +90,7 @@ if __name__ == "__main__":
             sim_dict["absorptions"] = param_dict["absorptions"]
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
-        measurements, N, src, ampl, mic_pos = simulate_rir(sim_dict)
+        measurements, N, src, ampl, mic_pos = simulate_rir(**sim_dict)
         domain = meta_param_dict.get("domain")
 
         if ideal:  # exact theoretical observations

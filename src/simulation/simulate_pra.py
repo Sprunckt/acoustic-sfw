@@ -11,7 +11,7 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
     return np.genfromtxt(file_path, delimiter=', ') * mic_size
 
 
-def simulate_rir(conf_path, save=None, verbose=False):
+def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, origin=None, absorptions=None, save=None, verbose=False):
     """Simulate a RIR using pyroomacoustics, using the parameters given in a .json configuration file/dictionary of
     parameters.
     The configuration file must contain the following fields :
@@ -33,17 +33,6 @@ def simulate_rir(conf_path, save=None, verbose=False):
     given in the configuration file)
     """
 
-    if type(conf_path) == str:
-        param_dict = json_to_dict(conf_path)
-        if verbose:
-            print("Getting parameters from {}".format(conf_path))
-    else:
-        param_dict = conf_path
-
-    room_dim, fs = param_dict["room_dim"], param_dict["fs"]
-    max_order = param_dict.get("max_order")
-
-    absorptions = param_dict.get("absorptions")
     if absorptions is None:
         absorptions = {"east": pra.Material(0.1), "west": pra.Material(0.1),
                        "north": pra.Material(0.1), "south": pra.Material(0.1),
@@ -60,9 +49,9 @@ def simulate_rir(conf_path, save=None, verbose=False):
                        materials=all_flat_materials, max_order=max_order)
 
     # add the source
-    room.add_source(param_dict["src_pos"])
+    room.add_source(src_pos)
 
-    mic_array = param_dict["mic_array"]
+    mic_array = mic_array
 
     room.add_microphone_array(mic_array.T)
 
@@ -76,7 +65,6 @@ def simulate_rir(conf_path, save=None, verbose=False):
     src = room.sources[0].get_images(max_order=max_order).T
     ampl = room.sources[0].get_damping(max_order=max_order).flatten()
 
-    origin = param_dict.get("origin")
     if origin is not None:
         origin = np.array(origin).reshape(1, 3)
         src -= origin
