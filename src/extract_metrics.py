@@ -3,6 +3,7 @@ Get the relevant metrics for a set of experiments
 Meant to be used as a script in command line.
 """
 import numpy as np
+import matplotlib.pyplot as plt
 from src.simulation.utils import json_to_dict, correlation, compare_arrays, unique_matches
 import pandas as pd
 import os
@@ -31,22 +32,33 @@ if __name__ == "__main__":
 
     try:
         paths = sys.argv[1].split(",")
-        opts, args = getopt.getopt(sys.argv[2:], 'p', ['tol=', 'save_path='])
+        opts, args = getopt.getopt(sys.argv[2:], '-s', ['tol=', 'save_path=', 'n_src=', 'n_plot='])
 
     except getopt.GetoptError:
-        print("extract_metrics.py path [--tol=] \n"
+        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] \n"
               "path : path to a directory or several paths separated by commas \n"
-              "--tol= : absolute tolerance \n")
+              "--tol= : absolute tolerance \n"
+              "--n_src= : number of sources considered for the reconstruction. If not specified, all the theoretical"
+              "sources are considered \n"
+              "--n_plot= : number of data points for a recall/precision curve in function "
+              "of the tolerance threshold \n"
+              "-s : show the plots after saving")
         sys.exit(1)
 
     save_path = "."
-    plot = False
-    tol = 1e-2
+    n_plot, show = 0, False
+    tol, n_src = 1e-2, 0
     for opt, arg in opts:
         if opt == '--save_path':
             save_path = arg
         elif opt == '--tol':
             tol = float(arg)
+        elif opt == '--n_src':
+            n_src = int(arg)
+        elif opt == '--n_plot':
+            n_plot = int(arg)
+        elif opt == '-s':
+            show = True
 
     path_list = []
     for path in paths:
@@ -60,13 +72,20 @@ if __name__ == "__main__":
         exp_df = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov",
                                        "mean_tp_dist", "mean_recov_dist",  "break_dist",
                                        "ampl_corr", "ampl_rel_error"])
-        tp, fp, fn = 0, 0, 0
+        thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
+        tp, fp, fn,  = 0, 0, 0
+        global_tp, global_fp = np.zeros_like(thresholds), np.zeros_like(thresholds)
+        global_fn = np.zeros_like(thresholds)
+
         for i in range(n_res):  # loop over every experiment
             complete_path = os.path.join(path, "exp_{}_res.json".format(i))
             res_dict = json_to_dict(complete_path)
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
 
+            # sort according to amplitudes and only consider n_src sources, or every source if n_src = 0
+            sort_ind = np.argsort(real_ampl)
+            real_sources, real_ampl = real_sources[sort_ind[-n_src:], :], real_ampl[sort_ind[-n_src:]]
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
             # unique matches, looking only at the True positives with maximum amplitude
@@ -87,6 +106,12 @@ if __name__ == "__main__":
             fp += nb_found - ctp  # positions incorrectly guessed
             fn += nb_needed - ctp  # sources not found (false negatives)
 
+            # current true positives computed at every threshold for plotting
+            complete_ctp = (dist < thresholds[:, np.newaxis]).sum(axis=-1)
+            global_tp += complete_ctp  # positions correctly guessed
+            global_fp += nb_found - complete_ctp  # positions incorrectly guessed
+            global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
+
             # mean distance to real sources for the best recovered sources
             mean_recov_dist = dist[dist < tol].mean()
 
@@ -99,11 +124,23 @@ if __name__ == "__main__":
                          ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
             exp_df = exp_df.append(entry, ignore_index=True)
 
-        exp_df.to_csv(os.path.join(path, "metrics_{}.csv".format(tol)))
+        if n_plot > 0:
+            plt.plot(thresholds, global_tp / (global_tp + global_fp), '-.', label='precision')
+            plt.plot(thresholds, global_tp / (global_tp + global_fn), '-.', label='recall')
+            plt.xlabel('tolerance threshold')
+            plt.ylabel('recovery ratio')
+            plt.xscale('log')
+            plt.legend()
+            plt.savefig(os.path.join(save_path, '{}_recall_curve.pdf'.format(os.path.split(path)[-1])))
+            if show:
+                plt.show()
+            else:
+                plt.clf()
+        exp_df.to_csv(os.path.join(path, "metrics_{}.csv".format(tol)), index=False)
 
         entry = dict(exp_id=path, TP=tp, FN=fn, FP=fp,
                      precision=tp/(tp+fp), recall=tp/(tp+fn))
 
         df = df.append(entry, ignore_index=True)
 
-    df.to_csv(os.path.join(save_path, 'metrics.csv'), index=False)
+    df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
