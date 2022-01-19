@@ -1,7 +1,7 @@
 import numpy as np
 import pyroomacoustics as pra
 import json
-from .utils import multichannel_rir_to_vec, array_to_list, json_to_dict
+from .utils import multichannel_rir_to_vec, array_to_list, c
 
 
 def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
@@ -11,7 +11,8 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
     return np.genfromtxt(file_path, delimiter=', ') * mic_size
 
 
-def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, origin=None, absorptions=None, save=None, verbose=False):
+def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
+                 origin=None, absorptions=None, save=None, verbose=False):
     """Simulate a RIR using pyroomacoustics, using the parameters given in a .json configuration file/dictionary of
     parameters.
     The configuration file must contain the following fields :
@@ -23,6 +24,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, origin=None, absor
         -origin (list, optional) : new origin for the coordinate system (translates the sources and microphones)
         -absorption (dict, optional) : dictionary containing the absorption rates (floats) for each wall (east, west,
     north, south, floor and ceiling)
+        -cutoff (float, optional) : maximum length for the RIR (in seconds)
     If save is a string, write the rir, rir length, sources and amplitudes to a file.
     Return :
         -measurements : vector containing every RIR of length N in a sequence
@@ -51,19 +53,31 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, origin=None, absor
     # add the source
     room.add_source(src_pos)
 
-    mic_array = mic_array
-
     room.add_microphone_array(mic_array.T)
 
     # Simulate RIR with image source method
     room.compute_rir()
 
-    # assemble the multichannel rir in a single array
-    measurements, N, M = multichannel_rir_to_vec(room.rir)  # N, M : number of time samples and microphones
-
     # get the image sources and corresponding amplitudes
     src = room.sources[0].get_images(max_order=max_order).T
     ampl = room.sources[0].get_damping(max_order=max_order).flatten()
+
+    if cutoff > 0:
+        # compute the discretized cutoff
+        dcutoff = int(cutoff * fs)
+        # compute the maximal detection distance to a microphone
+        max_dist = cutoff * c
+
+        # compute the distances between the sources (n_sources, 3) and microphones (M, 3), shape (M, n_src)
+        dist = np.sqrt(np.sum((src[np.newaxis, :, :] - mic_array[:, np.newaxis, :]) ** 2, axis=2))
+        # find the sources that are at a distance at most max_dist of at least one microphone (shape n_src)
+        remaining_src_ind = np.any(dist < max_dist, axis=0)
+        src, ampl = src[remaining_src_ind, :], ampl[remaining_src_ind]
+
+    else:
+        dcutoff = -1
+    # assemble the multichannel rir in a single array, N, M the number of time samples and microphones
+    measurements, N, M = multichannel_rir_to_vec(room.rir, cutoff=dcutoff)
 
     if origin is not None:
         origin = np.array(origin).reshape(1, 3)

@@ -9,7 +9,7 @@ c = 343
 std_off = pra.constants.get("frac_delay_length") // 2
 
 
-def multichannel_rir_to_vec(rir: list, start_offset: int = std_off, source: int = 0) -> (np.ndarray, int, int):
+def multichannel_rir_to_vec(rir: list, start_offset: int = std_off, source: int = 0, cutoff: int = -1) -> (np.ndarray, int, int):
     """
     Convert a list of RIRs of length N corresponding to M microphones to a single flat array of length J=N*M.
 
@@ -32,15 +32,21 @@ def multichannel_rir_to_vec(rir: list, start_offset: int = std_off, source: int 
         NN = len(rir[i][source][start_offset:])
         if N < NN:
             N = NN
-    res = np.empty(N*M)
+
+    if cutoff > 0:
+        length = np.minimum(N, cutoff)
+    else:
+        length = N
+
+    res = np.empty(length*M, dtype=float)
 
     for i in range(M):
         local_size = len(rir[i][source][start_offset:])
-        buffer = np.zeros(N)
-        buffer[:local_size] = rir[i][source][start_offset:]
-        res[i*N:(i+1)*N] = buffer
+        buffer = np.zeros(length)
+        buffer[:local_size] = rir[i][source][start_offset:length + start_offset]
+        res[i*length:(i+1)*length] = buffer
 
-    return res, N, M
+    return res, length, M
 
 
 def vec_to_rir(rir_vec, m, N):
