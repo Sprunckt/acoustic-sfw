@@ -34,7 +34,7 @@ def multichannel_rir_to_vec(rir: list, start_offset: int = std_off, source: int 
             N = NN
 
     if cutoff > 0:
-        length = np.minimum(N, cutoff)
+        length = int(np.minimum(N, cutoff))
     else:
         length = N
 
