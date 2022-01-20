@@ -72,25 +72,31 @@ if __name__ == "__main__":
             mic_pos = mic_pos @ rot_mat
 
         sim_dict = dict()
-        sim_dict["fs"] = fs
-        sim_dict["room_dim"] = param_dict["room_dim"]
-        sim_dict["src_pos"] = param_dict["src_pos"]
+
+        room_dim = param_dict["room_dim"]
+        src_pos = param_dict["src_pos"]
 
         # translate the microphones back to their original positions
         mic_pos += param_dict["origin"]
-        sim_dict["mic_array"] = mic_pos
-        sim_dict["origin"] = param_dict["origin"]
+        origin = param_dict["origin"]
 
         # maximum order of reflections used
-        sim_dict["max_order"] = meta_param_dict["max_order"]
+        max_order = meta_param_dict["max_order"]
 
         # choose to apply varying absorption rates or a default rate for each wall
         use_abs = meta_param_dict.get("use_absorption")
         if use_abs:
-            sim_dict["absorptions"] = param_dict["absorptions"]
+            absorptions = param_dict["absorptions"]
+        else:
+            absorptions = None
+
+        # choose to cut the rir
+        cutoff = meta_param_dict.get("cutoff", -1)
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
-        measurements, N, src, ampl, mic_pos = simulate_rir(**sim_dict)
+        measurements, N, src, ampl, mic_pos = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos, mic_array=mic_pos,
+                                                           origin=origin, max_order=max_order, absorptions=absorptions,
+                                                           cutoff=cutoff)
         domain = meta_param_dict.get("domain")
 
         if ideal:  # exact theoretical observations
