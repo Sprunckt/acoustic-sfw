@@ -4,7 +4,7 @@ Meant to be used as a script in command line.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from src.simulation.utils import json_to_dict, correlation, compare_arrays, unique_matches
+from src.simulation.utils import json_to_dict, correlation, unique_matches
 import pandas as pd
 import os
 import sys

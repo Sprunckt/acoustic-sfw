@@ -152,6 +152,7 @@ class SFW(ABC):
         amin, amax = 0, max_ampl
         self.nk = 0
 
+        ncores = multiprocessing.cpu_count()
         search_grid = grid
         assert search_grid is not None, "a grid must be specified for the initial grid search"
 
@@ -173,7 +174,6 @@ class SFW(ABC):
                 self.opt_options["gtol"] = 1e-2
 
             # spreading the loop over multiple processors
-            ncores = multiprocessing.cpu_count()
             p = multiprocessing.Pool(ncores)
             gr_opt = p.map(self._optigrid, search_grid)
             p.close()

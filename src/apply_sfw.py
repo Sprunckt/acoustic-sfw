@@ -165,7 +165,7 @@ if __name__ == "__main__":
 
         ind, dist = compare_arrays(x, src)
         print("source matching and distances : \n", ind)
-        print("distances and source orders : \n", dist, orders)
+        print("distances and source orders : \n", dist, orders[ind])
         max_dist_global = np.max(dist)
 
         dist_dic = dict()
