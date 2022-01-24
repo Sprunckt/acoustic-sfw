@@ -111,7 +111,7 @@ for i in range(new_exp):
                      fs=fs, origin=mic_pos)
 
     # simulate the RIR, the center of the antenna is choosed as the new origin
-    measurements, N, src, ampl, mic_array = simulate_rir(sim_param)
+    measurements, N, src, ampl, mic_array, orders = simulate_rir(**sim_param)
 
     sim_param["image_pos"] = src
     sim_param["ampl"] = ampl

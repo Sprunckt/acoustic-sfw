@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
-                                  json_to_dict, correlation, unique_matches, dict_to_json)
+                                  json_to_dict, correlation, unique_matches)
 from src.visualization import plot_room
 from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
@@ -94,9 +94,10 @@ if __name__ == "__main__":
         cutoff = meta_param_dict.get("cutoff", -1)
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
-        measurements, N, src, ampl, mic_pos = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos, mic_array=mic_pos,
-                                                           origin=origin, max_order=max_order, absorptions=absorptions,
-                                                           cutoff=cutoff)
+        measurements, N, src, ampl, mic_pos, orders = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos,
+                                                                   mic_array=mic_pos, origin=origin,
+                                                                   max_order=max_order, absorptions=absorptions,
+                                                                   cutoff=cutoff)
         domain = meta_param_dict.get("domain")
 
         if ideal:  # exact theoretical observations
@@ -163,7 +164,8 @@ if __name__ == "__main__":
         reconstr_rir = s.gamma(a, x)
 
         ind, dist = compare_arrays(x, src)
-        print("source matching and distances : \n", ind, dist)
+        print("source matching and distances : \n", ind)
+        print("distances and source orders : \n", dist, orders)
         max_dist_global = np.max(dist)
 
         dist_dic = dict()
@@ -172,7 +174,7 @@ if __name__ == "__main__":
         if domain == "frequential":
             measurements = [np.real(measurements).tolist(), np.imag(measurements).tolist()]
             reconstr_rir = [np.real(reconstr_rir).tolist(), np.imag(reconstr_rir).tolist()]
-        save_results(res_path, rir_path, image_pos=src, ampl=ampl, reconstr_pos=x, reconstr_ampl=a,
+        save_results(res_path, rir_path, image_pos=src, ampl=ampl, orders=orders, reconstr_pos=x, reconstr_ampl=a,
                      rir=measurements, reconstr_rir=reconstr_rir, N=N, **dist_dic)
 
         inda, indb, dist = unique_matches(x, src, ampl=a)

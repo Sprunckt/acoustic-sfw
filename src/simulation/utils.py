@@ -222,8 +222,8 @@ def json_to_dict(path, list_to_array=True):
 
 
 def save_results(res_path, rir_path, image_pos, ampl, reconstr_pos, reconstr_ampl,
-                 rir, reconstr_rir, N, **kwargs):
-    exp_res = dict(image_pos=array_to_list(image_pos), ampl=array_to_list(ampl),
+                 rir, reconstr_rir, N, orders=None, **kwargs):
+    exp_res = dict(image_pos=array_to_list(image_pos), ampl=array_to_list(ampl), orders=array_to_list(orders),
                    reconstr_pos=array_to_list(reconstr_pos), reconstr_ampl=array_to_list(reconstr_ampl), N=N)
     rir_dict = dict(rir=array_to_list(rir), reconstr_rir=array_to_list(reconstr_rir))
     for arg in kwargs:

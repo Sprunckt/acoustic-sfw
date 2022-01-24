@@ -61,6 +61,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
     # get the image sources and corresponding amplitudes
     src = room.sources[0].get_images(max_order=max_order).T
     ampl = room.sources[0].get_damping(max_order=max_order).flatten()
+    orders = room.sources[0].orders
 
     if cutoff > 0:
         # compute the discretized cutoff
@@ -72,7 +73,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         dist = np.sqrt(np.sum((src[np.newaxis, :, :] - mic_array[:, np.newaxis, :]) ** 2, axis=2))
         # find the sources that are at a distance at most max_dist of at least one microphone (shape n_src)
         remaining_src_ind = np.any(dist < max_dist, axis=0)
-        src, ampl = src[remaining_src_ind, :], ampl[remaining_src_ind]
+        src, ampl, orders = src[remaining_src_ind, :], ampl[remaining_src_ind], orders[remaining_src_ind]
 
     else:
         dcutoff = -1
@@ -94,4 +95,4 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         json.dump(res, fd)
         fd.close()
 
-    return measurements, N, src, ampl, mic_array
+    return measurements, N, src, ampl, mic_array, orders

@@ -74,7 +74,7 @@ def plot_3d_sphere(fun, radius, dtheta, dphi):
         plt.show()
 
 
-def plot_room(mic, src, ampl, reconstr_src):
+def plot_room(mic, src, ampl, reconstr_src, orders=None):
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
 
@@ -82,7 +82,12 @@ def plot_room(mic, src, ampl, reconstr_src):
     ax.scatter(*src[src_ind], label='source', marker='x')
     sec_src_ind = ampl < np.max(ampl)
 
-    wall_intersect = (src[src_ind] + src[sec_src_ind]) / 2
+    if orders is not None:
+        order1 = (orders == 1)
+    else:
+        order1 = sec_src_ind
+
+    wall_intersect = (src[src_ind] + src[order1]) / 2
     xmin, ymin, zmin = np.min(wall_intersect, axis=0)
     xmax, ymax, zmax = np.max(wall_intersect, axis=0)
 
