@@ -125,7 +125,7 @@ class SFW(ABC):
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     rough_search=False, spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
-                    use_eta_jac=False, use_slide_jac=True, plot=False) -> (np.ndarray, np.ndarray):
+                    plot=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -147,11 +147,6 @@ class SFW(ABC):
         """
         self.timer = time.time()
         self.eta, self.eta_jac, slide_jac = self._get_normalized_fun(normalization)
-
-        if not use_eta_jac:
-            self.eta_jac = "3-point"
-        if not use_slide_jac:
-            slide_jac = "3-point"
 
         xmin, xmax = -max_norm, max_norm
         amin, amax = 0, max_ampl
@@ -474,7 +469,7 @@ class TimeDomainSFW(SFW):
 
     def _get_normalized_fun(self, normalization):
         normalized_eta = [self.etak, self.etak_norm1][normalization]
-        normalized_eta_jac = [self._jac_etak, self._jac_etak_norm1][normalization]
+        normalized_eta_jac = ["3-point", "3-point"][normalization]  # eta jacobian is broken
         slide_jac = self._jac_slide_obj
         return normalized_eta, normalized_eta_jac, slide_jac
 
