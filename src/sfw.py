@@ -322,7 +322,7 @@ class TimeDomainSFW(SFW):
         """
 
         self.N = N
-        self.NN = np.arange(self.N)
+        self.NN = np.arange(self.N) / fs  # discretized time interval
 
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
@@ -354,7 +354,7 @@ class TimeDomainSFW(SFW):
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # sum( M, K, N, axis=1)
-        return np.sum(self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, :, np.newaxis] / c)
+        return np.sum(self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)
                       / 4 / np.pi / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
@@ -363,7 +363,7 @@ class TimeDomainSFW(SFW):
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N, K) -> (J, K)
-        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
+        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
                                / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.J, -1))
 
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
@@ -377,7 +377,7 @@ class TimeDomainSFW(SFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
@@ -388,7 +388,7 @@ class TimeDomainSFW(SFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
@@ -398,7 +398,7 @@ class TimeDomainSFW(SFW):
         # distances from in to every microphone, shape (M,)
         dist = np.sqrt(np.sum(diff ** 2, axis=1))
 
-        int_term = self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c  # shape (M, N)
+        int_term = self.NN[np.newaxis, :] - dist[:, np.newaxis] / c  # shape (M, N)
 
         # sum shape (M,  N) into shape (M,), derivate without the xk_i - xm_i factor
         tens = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
@@ -414,7 +414,7 @@ class TimeDomainSFW(SFW):
         # distances from in to every microphone, shape (M,)
         dist = np.sqrt(np.sum(diff ** 2, axis=1))
 
-        int_term = self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c  # shape (M, N)
+        int_term = self.NN[np.newaxis, :] - dist[:, np.newaxis] / c  # shape (M, N)
 
         norm2 = np.sum(1/dist**2)
         norm = np.sqrt(norm2)  # float
@@ -439,7 +439,7 @@ class TimeDomainSFW(SFW):
 
         jac = np.zeros(self.nk*4)
 
-        int_term = self.NN[np.newaxis, np.newaxis, :] / self.fs - dist[:, :, np.newaxis] / c
+        int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
         # shape (M, K, N) = gamma_j(x_k)
         gamma_tens = (self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis])
 
@@ -460,7 +460,7 @@ class TimeDomainSFW(SFW):
         return jac
 
     def _grid_initialization_function(self, grid, verbose):
-        m_max, n_max = flat_to_multi_ind(np.argmax(self.res), self.N)
+        m_max, n_max = flat_to_multi_ind(np.argmax(np.abs(self.res)), self.N)
         r = n_max * c / self.fs
         search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
@@ -498,7 +498,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # sum( M, K, N, axis=1)
-        return np.sum(self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, :, np.newaxis] / c)
+        return np.sum(self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)
                       / 4 / np.pi / np.sqrt(dist[:, :, np.newaxis]**2 + self.eps)
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
@@ -507,7 +507,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N, K) -> (J, K)
-        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] / self.fs - dist[:, np.newaxis, :] / c)
+        gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
                                / 4 / np.pi / np.sqrt(dist[:, np.newaxis, :]**2 + self.eps), newshape=(self.J, -1))
 
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
@@ -521,7 +521,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] / self.fs - dist[:, np.newaxis] / c)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(dist[:, np.newaxis]**2 + self.eps)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
