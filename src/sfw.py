@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from typing import Union, Tuple
 from scipy.optimize import minimize
 from sklearn.linear_model import Lasso
-from src.simulation.utils import (disp_measure, c)
+from src.simulation.utils import (disp_measure, c, cut_vec_rir)
 import multiprocessing
 import time
 from abc import ABC, abstractmethod
@@ -14,6 +14,10 @@ merge_tol = 0.02
 
 def flat_to_multi_ind(ind, N):
     return ind // N, ind % N
+
+
+def compute_time_sample(N, fs):
+    return np.arange(N) / fs
 
 
 class SFW(ABC):
@@ -30,7 +34,9 @@ class SFW(ABC):
         self.xkp = np.zeros((1, self.d))  # temporary storage for spike locations
 
         self.res = self.y.copy()  # residue
+        self.res_norm = np.linalg.norm(self.res[:self.N])  # full RIR norm (including all microphones)
         self.nk = 0
+        self.it = 0
 
         self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
                             'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
@@ -122,10 +128,22 @@ class SFW(ABC):
         eta optimization and sliding steps. normalization=0 should return the default functions."""
         pass
 
+    def compute_residue(self):
+        gk = self.gamma(self.ak, self.xk)
+        self.res = self.y - gk
+
+        return self.res
+
+    def _algorithm_start_callback(self, **args):
+        pass
+
+    def _iteration_start_callback(self, **args):
+        pass
+
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     rough_search=False, spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
-                    plot=False) -> (np.ndarray, np.ndarray):
+                    plot=False, algo_start_cb=None, it_start_cb=None) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -156,11 +174,26 @@ class SFW(ABC):
         search_grid = grid
         assert search_grid is not None, "a grid must be specified for the initial grid search"
 
+        if algo_start_cb is None:
+            algo_start_cb = {}
+
+        if it_start_cb is None:
+            it_start_cb = {}
+
+        it_start_cb["verbose"] = verbose
+        algo_start_cb["verbose"] = verbose
+
+        self._algorithm_start_callback(**algo_start_cb)
+
         for i in range(niter):
+            self.it += 1
+            if verbose:
+                print("iteration {}, residual norm : {}".format(self.it, self.res_norm))
+
+            self._iteration_start_callback(**it_start_cb)
             # find argmax etak to get the new spike position (step 3)
             if verbose:
                 print("Optimizing for spike position -----")
-
             # grid search : one optimization per grid point (the grid has the shape (Ngrid, d))
             tstart = time.time()
 
@@ -288,13 +321,17 @@ class SFW(ABC):
             if verbose:
                 print("New measure :")
                 disp_measure(self.ak, self.xk)
-            gk = self.gamma(self.ak, self.xk)
-            self.res = self.y - gk
+
+            # update the residue
+            self.compute_residue()
+
             if plot:
+                gk = self.gamma(self.ak, self.xk)  # current rir
                 if self.y.dtype == float:
                     plt.plot(self.y, label="measures")
                     plt.plot(gk, '--', label="current value")
                     plt.plot(self.res, label="residue")
+
                 else:
                     fig, ax = plt.subplots(2)
                     ax[0].set_title("real part"), ax[1].set_title("imaginary part")
@@ -321,8 +358,11 @@ class TimeDomainSFW(SFW):
             -lam (float) : penalization parameter of the BLASSO.
         """
 
+        # number of time samples of the full RIR
+        self.global_N = N
+        # number of time samples used in practice (might change during execution)
         self.N = N
-        self.NN = np.arange(self.N) / fs  # discretized time interval
+        self.NN = compute_time_sample(self.N, fs)  # discretized time interval
 
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
@@ -332,8 +372,104 @@ class TimeDomainSFW(SFW):
         self.J = self.M * self.N
 
         super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
+        # full rir
+        self.global_y = self.y
 
+        # antenna diameter
+        self.antenna_diameter = np.sqrt(np.max(np.sum((self.mic_pos[np.newaxis, :, :] -
+                                                       self.mic_pos[:, np.newaxis, :])**2, axis=-1)))
+
+        # variables used to extend the time interval progressively
+        partial_rir = self.y[:self.global_N]  # RIR for the first microphone
+        self.cumulated_energy = np.sqrt(np.cumsum(partial_rir ** 2))
+        self.cut_ind = None  # indexes for cutting the RIR
+        self.swap_counter = -1  # number of full iterations since last extension
+        self.swap_factor = 0.  # growth criterion on the residual norm to extend the RIR
+        self.swap_frequency = 0  # number of iterations before extending the RIR
+        self.res_norm = np.linalg.norm(partial_rir)  # norm of the first RIR
+        self.old_norm = self.res_norm
+        self.current_ind = 0  # index of the last cutting threshold used
         assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
+
+    def _algorithm_start_callback(self, verbose=False, n_cut=0, int_start=None,
+                                  swap_frequency=10, swap_factor=0.5):
+        """Parametrize the segmentation of the time interval.
+        Args:-n_cut (int) : number of cutting thresholds (number of subintervals -1). Set to 0 to use the full RIR.
+        5 is a good default value.
+        -int_start (float) : starting value for the choice of the threshold (maximum value is the norm of the RIR),
+        default : norm/3
+        -swap_frequency (int) : maximum number of full iterations before extending to the next threshold"""
+        int_end = self.cumulated_energy[-1]  # vector norm of the first microphone RIR
+        if int_start is None:
+            int_start = int_end / 3.
+
+        cut_values = np.logspace(np.log(int_start), np.log(int_end), n_cut, base=np.e, endpoint=False)
+
+        if n_cut > 0:
+            overshoot = int(self.fs * self.antenna_diameter / c)  # worst minimal time to go through the antenna
+            cut_ind = [np.argmax(self.cumulated_energy > cut_values[0]) + overshoot]
+
+            for i in range(1, n_cut):
+                # find the smallest time sample for which an energy threshold is reached (overshoot by a few samples)
+                new_ind = np.argmax(self.cumulated_energy > cut_values[i]) + overshoot
+                if new_ind - cut_ind[-1] > 50:  # only add the next index if there is a minimal time separation
+                    cut_ind.append(new_ind)
+
+            cut_ind.append(self.global_N - 1)  # last index of the complete first microphone RIR
+            self.cut_ind = np.array(cut_ind)
+            if verbose:
+                print("Cutting the RIR according to {} thresholds".format(len(self.cut_ind) - 1))
+                print("Cutting samples : ", self.cut_ind)
+
+            # update N, NN according to the segmentation
+            self.N = self.cut_ind[0]
+
+            self.NN = compute_time_sample(self.N, self.fs)
+
+            self.y = cut_vec_rir(self.global_y, self.M, self.global_N, self.N)
+            self.swap_frequency = swap_frequency
+            self.swap_factor = swap_factor
+            self.compute_residue()
+            self.old_norm = self.res_norm
+        else:
+            self.cut_ind = np.empty(0)
+        self.current_ind = 0
+
+    def _iteration_start_callback(self, verbose=False):
+        self.swap_counter += 1
+        curr_ind = self.current_ind
+        curr_norm, thresh = self.res_norm, self.swap_factor*self.old_norm
+        threshold_reached = curr_norm < thresh
+        max_iter_reached = self.swap_counter > self.swap_frequency
+        if (curr_ind < len(self.cut_ind)  # check that the last threshold has not been reached
+                and (threshold_reached or max_iter_reached)):  # update RIR length
+
+            self.old_norm, new_thresh, new_norm = curr_norm, thresh, curr_norm
+            while new_norm < new_thresh:  # loop until the norm threshold is under the current residual norm
+                curr_ind += 1
+                # update the norm : current residual + the norm of the appended RIR segment
+                app_norm = (self.cumulated_energy[self.cut_ind[curr_ind]] -
+                            self.cumulated_energy[self.cut_ind[curr_ind-1]])
+                self.old_norm += app_norm
+                new_norm += app_norm
+                new_thresh = self.swap_factor*self.old_norm
+            self.current_ind = curr_ind
+            self.N = self.cut_ind[curr_ind]
+            self.NN = compute_time_sample(self.N, self.fs)
+            self.y = cut_vec_rir(self.global_y, self.M, self.global_N, self.N)
+            self.compute_residue()
+
+            if verbose:
+                print("Extending RIR from {}s to {}s after {} it".format(self.cut_ind[curr_ind - 1] / self.fs,
+                                                                         self.cut_ind[curr_ind] / self.fs,
+                                                                         self.swap_counter))
+                if threshold_reached:
+                    print("Reason : norm criterion reached : {} < {}".format(curr_norm,
+                                                                             thresh))
+                else:
+                    print("Reason :  max iteration reached")
+
+            self.swap_counter = 0
 
     def sinc_filt(self, t):
         """
@@ -346,8 +482,8 @@ class TimeDomainSFW(SFW):
         """
         Derivate of the filter
         """
-        w = np.pi*self.fs
-        return (t*np.cos(w*t) - np.sin(w*t)/w) / (t**2+np.finfo(float).eps)
+        w = np.pi * self.fs
+        return (t * np.cos(w * t) - np.sin(w * t) / w) / (t ** 2 + np.finfo(float).eps)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -358,13 +494,20 @@ class TimeDomainSFW(SFW):
                       / 4 / np.pi / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
+    def compute_residue(self):
+        gk = self.gamma(self.ak, self.xk)
+        self.res = self.y - gk
+        self.res_norm = np.linalg.norm(self.res[:self.N])  # residual norm of the first RIR
+
+        return self.res
+
     def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N, K) -> (J, K)
         gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
-                               / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.J, -1))
+                               / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.M * self.N, -1))
 
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
@@ -389,7 +532,7 @@ class TimeDomainSFW(SFW):
 
         # shape (M, N) to (M*N,)
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
-                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
+                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
 
@@ -402,12 +545,12 @@ class TimeDomainSFW(SFW):
 
         # sum shape (M,  N) into shape (M,), derivate without the xk_i - xm_i factor
         tens = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
-                      / dist[:, np.newaxis]**2 / 4 / np.pi) * self.res.reshape(self.M, self.N), axis=1)
+                       / dist[:, np.newaxis] ** 2 / 4 / np.pi) * self.res.reshape(self.M, self.N), axis=1)
 
         # shape (M,3) into (M,)
         jac = (np.sum(tens[:, np.newaxis] * diff, axis=0).flatten())
 
-        return -jac*np.sign(self.etak(x)) / self.lam
+        return -jac * np.sign(self.etak(x)) / self.lam
 
     def _jac_etak_norm1(self, x):
         diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
@@ -416,20 +559,20 @@ class TimeDomainSFW(SFW):
 
         int_term = self.NN[np.newaxis, :] - dist[:, np.newaxis] / c  # shape (M, N)
 
-        norm2 = np.sum(1/dist**2)
+        norm2 = np.sum(1 / dist ** 2)
         norm = np.sqrt(norm2)  # float
-        norm_der = - np.sum(diff/dist[:, np.newaxis]**4, axis=0) / norm  # shape (3,)
+        norm_der = - np.sum(diff / dist[:, np.newaxis] ** 4, axis=0) / norm  # shape (3,)
 
         # sum shape (M,  N) into shape (M,), derivative  of gammaj * N without the xk_i - xm_i factor
         der_gam = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
-                         / dist[:, np.newaxis]**2 / 4 / np.pi / norm) * self.res.reshape(self.M, self.N), axis=1)
+                          / dist[:, np.newaxis] ** 2 / 4 / np.pi / norm) * self.res.reshape(self.M, self.N), axis=1)
         der_gam = (np.sum(der_gam[:, np.newaxis] * diff, axis=0).flatten())  # shape (3,)
 
         # derivative of N * gammaj without the xk_i - xm_i factor
         der_N = (np.sum((- self.sinc_filt(int_term) / dist[:, np.newaxis] / 4 / np.pi).flatten() * self.res)
                  * norm_der / norm2)  # shape (3,)
 
-        return -np.sign(self.etak_norm1(x))*(der_gam + der_N) / self.lam
+        return -np.sign(self.etak_norm1(x)) * (der_gam + der_N) / self.lam
 
     def _jac_slide_obj(self, var):
         a, x = var[:self.nk], var[self.nk:].reshape(-1, self.d)
@@ -437,7 +580,7 @@ class TimeDomainSFW(SFW):
         # distances from the diracs contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum(diff ** 2, axis=2))
 
-        jac = np.zeros(self.nk*4)
+        jac = np.zeros(self.nk * 4)
 
         int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
         # shape (M, K, N) = gamma_j(x_k)
@@ -447,11 +590,11 @@ class TimeDomainSFW(SFW):
         residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - self.y)
         # derivates in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
         jac[:self.nk] = (np.sum(residue.reshape(self.M, self.N)[:, np.newaxis, :] * gamma_tens, axis=(0, 2))
-                         + self.lam*np.sign(a))
+                         + self.lam * np.sign(a))
 
         # shape (M, K, N), derivate without the xk_i - xm_i factor
         gamma_tens = ((- gamma_tens - self.sinc_der(int_term) / 4 / np.pi / c)
-                      / dist[:, :, np.newaxis]**2 * residue.reshape(self.M, self.N)[:, np.newaxis, :])
+                      / dist[:, :, np.newaxis] ** 2 * residue.reshape(self.M, self.N)[:, np.newaxis, :])
 
         # original shape (M,K,3,N)
         jac[self.nk:] = (np.repeat(a, 3)
@@ -499,7 +642,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
         # sum( M, K, N, axis=1)
         return np.sum(self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)
-                      / 4 / np.pi / np.sqrt(dist[:, :, np.newaxis]**2 + self.eps)
+                      / 4 / np.pi / np.sqrt(dist[:, :, np.newaxis] ** 2 + self.eps)
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
     def _LASSO_step(self):
@@ -508,7 +651,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
         # shape (M, N, K) -> (J, K)
         gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
-                               / 4 / np.pi / np.sqrt(dist[:, np.newaxis, :]**2 + self.eps), newshape=(self.J, -1))
+                               / 4 / np.pi / np.sqrt(dist[:, np.newaxis, :] ** 2 + self.eps), newshape=(self.J, -1))
 
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
@@ -522,7 +665,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
         # shape (M, N) to (M*N,)
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
-                  / 4 / np.pi / np.sqrt(dist[:, np.newaxis]**2 + self.eps)).flatten()
+                  / 4 / np.pi / np.sqrt(dist[:, np.newaxis] ** 2 + self.eps)).flatten()
 
         return -np.abs(np.sum(self.res * gammaj)) / self.lam
 
@@ -552,7 +695,7 @@ class FrequencyDomainSFW(SFW):
         assert 1 < self.d < 4, "Invalid dimension d"
 
         # array of observed frequencies
-        self.freq_array = np.fft.rfftfreq(N, d=1./fs)*2*np.pi
+        self.freq_array = np.fft.rfftfreq(N, d=1. / fs) * 2 * np.pi
 
         self.N, self.N_freq = N, len(self.freq_array)
 
@@ -560,12 +703,12 @@ class FrequencyDomainSFW(SFW):
 
         # compute the FFT of the rir, divide by the normalization constant
         y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.N),
-                             axis=-1).flatten() / np.sqrt(2*np.pi)
+                             axis=-1).flatten() / np.sqrt(2 * np.pi)
 
         super().__init__(y=y_freq, fs=fs, lam=lam)  # getting attributes and methods from parent class
 
     def sinc_hat(self, w):
-        return 1.*(np.abs(w) <= self.fs*np.pi)  # no 1/fs factor to account for FT approximation with DFT
+        return 1. * (np.abs(w) <= self.fs * np.pi)  # no 1/fs factor to account for FT approximation with DFT
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -573,8 +716,8 @@ class FrequencyDomainSFW(SFW):
 
         # sum(M, K, N_freq, axis=1)
         return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                      * np.exp(-1j*self.freq_array[np.newaxis, np.newaxis, :]*dist[:, :, np.newaxis]/c)
-                      / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, :, np.newaxis]
+                      * np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
+                      / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
     def etak(self, x: np.ndarray) -> float:
@@ -583,8 +726,8 @@ class FrequencyDomainSFW(SFW):
 
         # shape (M, Nfreq) to (M*Nfreq,)
         gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
-                  * np.exp(-1j*self.freq_array[np.newaxis, :]*dist[:,  np.newaxis]/c)
-                  / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis]).flatten()
+                  * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
+                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis]).flatten()
 
         return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
 
@@ -596,7 +739,7 @@ class FrequencyDomainSFW(SFW):
         # shape (M, N) to (M*N,)
         gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
                   * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
-                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1/dist)).flatten()
+                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
 
         return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
 
@@ -606,15 +749,16 @@ class FrequencyDomainSFW(SFW):
 
         # shape (M, N_freq, K) -> (J, K)
         gamma_mat_cpx = np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
-                                   * np.exp(-1j*self.freq_array[np.newaxis, :, np.newaxis]*dist[:, np.newaxis, :]/c)
-                                   / 4 / np.pi / np.sqrt(2*np.pi) / dist[:, np.newaxis, :],
+                                   * np.exp(
+            -1j * self.freq_array[np.newaxis, :, np.newaxis] * dist[:, np.newaxis, :] / c)
+                                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis, :],
                                    newshape=(self.J, -1))
 
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
                                     np.imag(gamma_mat_cpx)], axis=0)
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
         target = np.concatenate([np.real(self.y), np.imag(self.y)]).reshape(-1, 1)
-        scale = np.sqrt(2*len(gamma_mat))  # rescaling factor for sklearn convention
+        scale = np.sqrt(2 * len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * target)
 

@@ -152,9 +152,11 @@ if __name__ == "__main__":
         inv_rot_walls = rot_walls.inv()
         s.mic_pos = mic_pos @ rot_walls.as_matrix()
 
+        algo_start_cb = meta_param_dict.get("start_cb")
+
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
-                             max_ampl=200,
+                             max_ampl=200, algo_start_cb=algo_start_cb,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
                              use_hard_stop=True, verbose=True, rough_search=True, early_stopping=True, plot=False)
 

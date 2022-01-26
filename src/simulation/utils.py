@@ -59,6 +59,13 @@ def vec_to_rir(rir_vec, m, N):
     return rir_vec[m*N:(m + 1)*N]
 
 
+def cut_vec_rir(rir_vec, M, N, Ncut):
+    """
+    Cut a flat RIR up to a given time sample Ncut (each of the M RIRs are cut) and return the corresponding vector.
+    """
+    return rir_vec.reshape(M, N)[:, :Ncut].flatten()
+
+
 def create_grid(xmin, xmax, ymin, ymax, zmin, zmax, N, flat=True):
     """
     Create a cartesian grid according to the given parameters.
