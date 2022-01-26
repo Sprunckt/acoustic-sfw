@@ -17,7 +17,20 @@ def flat_to_multi_ind(ind, N):
 
 
 def compute_time_sample(N, fs):
+    """
+    Compute the full discretization of the time interval
+    """
     return np.arange(N) / fs
+
+
+def sliding_window_norm(a, win_length):
+    """
+    Compute the maximum of a sliding mean on the energy.
+    """
+    energy = a**2
+    sliding_mean = np.convolve(energy, np.full(win_length, 1./win_length), 'same')
+    ind = np.argmax(sliding_mean)
+    return ind, sliding_mean[ind]
 
 
 class SFW(ABC):
@@ -603,7 +616,13 @@ class TimeDomainSFW(SFW):
         return jac
 
     def _grid_initialization_function(self, grid, verbose):
-        m_max, n_max = flat_to_multi_ind(np.argmax(np.abs(self.res)), self.N)
+        curr_max, n_max, m_max = -1, 0, 0
+        for m in range(self.M):
+            ind_tmp, max_tmp = sliding_window_norm(self.res[m*self.N: (m+1)*self.N], 3)
+            if max_tmp > curr_max:
+                curr_max = max_tmp
+                n_max, m_max = ind_tmp, m
+
         r = n_max * c / self.fs
         search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
