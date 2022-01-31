@@ -162,28 +162,33 @@ def compare_arrays(a, b, unique=False):
     return ind_min, dist[np.arange(len(a)), ind_min]
 
 
-def unique_matches(a, b, ampl) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def unique_matches(a, b, ampl=None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute the distances between each line vector of two 2d-arrays a and b and match the smallest distances from
     the lines of a to the lines of b. If more than one line of a is matched to the same line of b, the array ampl is 
     used to eliminate the duplicate matches.
     
     Args:-ampl (ndarray):flat array of amplitudes used to sort the matches. If a[k] and a[l] are matched to b[m] and
-    ampl[k] < ampl[l] only a[l] is considered. If all amplitudes are equal the smallest index wins.
+    ampl[k] < ampl[l] only a[l] is considered. If all amplitudes are equal the smallest index wins. If a is None, return
+    the closest match in distance.
     
     Return: tuple(inda, indb, dist) where :
         -inda, indb are the arrays giving the index of matches between the lines of a and b
         -dist is the corresponding array of distances
     """
-    assert len(a) == len(ampl), "invalid shapes"
 
     ind_min, dist = compare_arrays(a, b)
     unique = np.unique(ind_min)
     final_inda_list, final_indb_list, final_dist_list = [], [], []
     for ind in unique:
-        tmp_ampl = np.zeros_like(ampl)
         matches = ind_min == ind
-        tmp_ampl[matches] = ampl[matches]
-        best_match = np.argmax(tmp_ampl)
+        if ampl is None:
+            tmp_dist = np.ones_like(dist)
+            tmp_dist[matches] = dist[matches]
+            best_match = np.argmin(tmp_dist)
+        else:
+            tmp_ampl = np.zeros_like(ampl)
+            tmp_ampl[matches] = ampl[matches]
+            best_match = np.argmax(tmp_ampl)
         final_inda_list.append(best_match)
         final_indb_list.append(ind_min[best_match])
         final_dist_list.append(dist[best_match])
