@@ -154,7 +154,7 @@ class SFW(ABC):
         pass
 
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
-                    rough_search=False, spike_merging=False, spherical_search=0,
+                    search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None) -> (np.ndarray, np.ndarray):
         """
@@ -170,6 +170,10 @@ class SFW(ABC):
             -max_norm (float) : used as bounds for the coordinates of the spike locations in each direction
             -use_hard_stop (bool) : if True, add |etak| < 1 as a stopping condition
             -early_stopping (bool) : if True, stop at the end of an iteration if the last spike found has zero amplitude
+            -search_method (str) : grid search methods for the spike position search. If "rough" : perform a coarse
+        optimization on each point of the grid before refining on the best position. If "full" : perform a fine
+        optimization on each grid point (costly). If "naive" : find the best value on the grid and use it as
+        initialization (fastest but less precize).
 
          Return:
             (ak, xk) where :
@@ -214,38 +218,48 @@ class SFW(ABC):
                 search_grid = self._grid_initialization_function(grid, verbose=verbose)
 
             if verbose:
-                print("Starting a grid search to minimize etak")
+                print("Starting a grid search to minimize etak, method : ", search_method)
 
-            if rough_search:  # perform a low precision search
-                self.opt_options["gtol"] = 1e-2
+            rough_search = search_method == "rough"
+            if rough_search or search_method == "full":
 
-            # spreading the loop over multiple processors
-            p = multiprocessing.Pool(ncores)
-            gr_opt = p.map(self._optigrid, search_grid)
-            p.close()
+                if search_method == "rough":  # perform a low precision search
+                    self.opt_options["gtol"] = 1e-2
 
-            # searching for the best result over the grid
-            curr_min, curr_opti_res = np.inf, None
-            for el in gr_opt:
-                if el.fun < curr_min and np.linalg.norm(el.x) > min_norm:
-                    curr_min = el.fun
-                    curr_opti_res = el
-            if rough_search:  # perform a finer optimization using the position found as initialization
-                nit = curr_opti_res.nit
-                self.opt_options["gtol"] = 1e-6
-                opti_res = self._optigrid(curr_opti_res.x)
-                nit += opti_res.nit
+                # spreading the loop over multiple processors
+                p = multiprocessing.Pool(ncores)
+                gr_opt = p.map(self._optigrid, search_grid)
+                p.close()
+
+                # searching for the best result over the grid
+                curr_min, curr_opti_res = np.inf, None
+                for el in gr_opt:
+                    if el.fun < curr_min and np.linalg.norm(el.x) > min_norm:
+                        curr_min = el.fun
+                        curr_opti_res = el
+                if rough_search:  # perform a finer optimization using the position found as initialization
+                    nit = curr_opti_res.nit
+                    self.opt_options["gtol"] = 1e-6
+                    opti_res = self._optigrid(curr_opti_res.x)
+                    nit += opti_res.nit
+                else:
+                    opti_res = curr_opti_res
+                    nit = opti_res.nit
+
+                del gr_opt
+
             else:
-                opti_res = curr_opti_res
+                mapping = np.apply_along_axis(self.eta, 1, search_grid)
+                ind_max = np.argmin(mapping)
+                self.opt_options["gtol"] = 1e-6
+                opti_res = self._optigrid(search_grid[ind_max])
                 nit = opti_res.nit
 
-            del gr_opt
+            etaval = np.abs(opti_res.fun)
+            x_new = opti_res.x.reshape([1, self.d])
 
             if verbose:
                 print("exec time for grid optimization : ", time.time() - tstart)
-
-            x_new = opti_res.x.reshape([1, self.d])
-            etaval = np.abs(opti_res.fun)
 
             if not opti_res.success:
                 print("etak optimization failed, reason : {}".format(opti_res.message))

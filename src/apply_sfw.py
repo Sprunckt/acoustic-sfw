@@ -127,6 +127,7 @@ if __name__ == "__main__":
 
         grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
                                                       meta_param_dict["dphi"], meta_param_dict["dphi"])
+
         # file name without extension
         file_ind = os.path.splitext((os.path.split(path)[-1]))[0]
         curr_save_path = os.path.join(save_path, file_ind)
@@ -158,11 +159,15 @@ if __name__ == "__main__":
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
-                             use_hard_stop=True, verbose=True, rough_search=True, early_stopping=True, plot=False)
+                             use_hard_stop=True, verbose=True, search_method="rough", early_stopping=True, plot=False)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
         s.mic_pos = s.mic_pos @ inv_rot_walls.as_matrix()
+
+        if domain != "frequential":  # extend the RIR to the maxium length
+            s.N = s.global_N
+
         reconstr_rir = s.gamma(a, x)
 
         ind, dist = compare_arrays(x, src)
@@ -172,6 +177,12 @@ if __name__ == "__main__":
 
         dist_dic = dict()
         dist_dic["distances"], dist_dic["matching"] = dist, ind
+
+        if algo_start_cb is not None:
+            if algo_start_cb.get("n_cut") is not None:
+                dist_dic["cut_ind"] = s.cut_ind
+        # save the position of the microphones
+        dist_dic["mic_array"] = s.mic_pos
 
         if domain == "frequential":
             measurements = [np.real(measurements).tolist(), np.imag(measurements).tolist()]
