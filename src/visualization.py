@@ -84,8 +84,10 @@ def plot_room(mic, src, ampl, reconstr_src, orders=None):
 
     if orders is not None:
         order1 = (orders == 1)
+        colors_true = orders[sec_src_ind]
     else:
         order1 = sec_src_ind
+        colors_true = ['blue']
 
     wall_intersect = (src[src_ind] + src[order1]) / 2
     xmin, ymin, zmin = np.min(wall_intersect, axis=0)
@@ -102,7 +104,7 @@ def plot_room(mic, src, ampl, reconstr_src, orders=None):
     ax.scatter(reconstr_src[:, 0], reconstr_src[:, 1], reconstr_src[:, 2], label='reconstructed sources',
                marker='o',  s=50, alpha=0.3, edgecolor='k', color='red')
     ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
-               marker='D', alpha=1, s=5, color='blue')
+               marker='D', alpha=1, s=5, c=colors_true)
     plt.legend()
     plt.show()
 
