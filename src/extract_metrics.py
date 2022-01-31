@@ -32,21 +32,29 @@ if __name__ == "__main__":
 
     try:
         paths = sys.argv[1].split(",")
-        opts, args = getopt.getopt(sys.argv[2:], '-s', ['tol=', 'save_path=', 'n_src=', 'n_plot='])
+        opts, args = getopt.getopt(sys.argv[2:], '-s', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
+                                                        'n_src='])
 
     except getopt.GetoptError:
-        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] \n"
+        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] \n"
               "path : path to a directory or several paths separated by commas \n"
               "--tol= : absolute tolerance \n"
-              "--n_src= : number of sources considered for the reconstruction. If not specified, all the theoretical"
-              "sources are considered \n"
+              "--method= : method used to identify which true sources to consider. Available methods : \n"
+              "   -amplitude : rank by decreasing amplitudes \n"
+              "   -distance : rank by increasing distance \n"
+              "--delimiter= : delimiting threshold for the distance method : only consider the true sources that are at"
+              "a distance inferior or equal to 'delimiter'. Same behavior for the predicted sources, with a maximal"
+              "distance of 'delimiter' + tol.\n"
+              "method == distance."
+              "--n_src : number of sources considered for the reconstruction. If not specified, all the theoretical"
+              "sources recoverable for the given method and delimiter are considered \n"
               "--n_plot= : number of data points for a recall/precision curve in function "
               "of the tolerance threshold \n"
               "-s : show the plots after saving")
         sys.exit(1)
 
     save_path = "."
-    n_plot, show = 0, False
+    n_plot, show, method, delimiter = 0, False, "distance", np.inf
     tol, n_src = 1e-2, 0
     for opt, arg in opts:
         if opt == '--save_path':
@@ -57,6 +65,10 @@ if __name__ == "__main__":
             n_src = int(arg)
         elif opt == '--n_plot':
             n_plot = int(arg)
+        elif opt == '--method':
+            method = arg
+        elif opt == '--delimiter':
+            delimiter = float(arg)
         elif opt == '-s':
             show = True
 
@@ -70,7 +82,7 @@ if __name__ == "__main__":
         n_res = len(df_res)
 
         exp_df = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov",
-                                       "mean_tp_dist", "mean_recov_dist",  "break_dist",
+                                       "mean_tp_dist", "mean_recov_dist",
                                        "ampl_corr", "ampl_rel_error"])
         thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
         tp, fp, fn,  = 0, 0, 0
@@ -79,19 +91,40 @@ if __name__ == "__main__":
 
         for i in range(n_res):  # loop over every experiment
             complete_path = os.path.join(path, "exp_{}_res.json".format(i))
+
             res_dict = json_to_dict(complete_path)
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
 
-            # sort according to amplitudes and only consider n_src sources, or every source if n_src = 0
-            sort_ind = np.argsort(real_ampl)
-            real_sources, real_ampl = real_sources[sort_ind[-n_src:], :], real_ampl[sort_ind[-n_src:]]
+            # only consider n_src sources, or every source if n_src = 0
+            if method == "amplitude":  # sort according to amplitudes
+                sort_ind = np.argsort(real_ampl)
+                real_sources, real_ampl = real_sources[sort_ind[-n_src:], :], real_ampl[sort_ind[-n_src:]]
+                orders = res_dict["orders"][sort_ind[-n_src:]]
+            elif method == "distance":  # sort according to the distances
+                mic_array = res_dict["mic_array"]
+                # distances between sources and microphones
+                real_dist = np.sqrt(np.sum((real_sources[np.newaxis, :, :]
+                                            - mic_array[:, np.newaxis, :]) ** 2, axis=2))
+                # find the sources that are at a distance at most 'delimiter' of at least one microphone
+                remaining_src_ind = np.any(real_dist < delimiter, axis=0)
+                # compute the minimal distance to the array
+                real_dist = np.min(real_dist[:, remaining_src_ind], axis=0)
+                sort_ind = np.argsort(real_dist)  # sort according to distance
+
+                if n_src > 0:
+                    sort_ind = sort_ind[:n_src]
+
+                real_sources = real_sources[remaining_src_ind][sort_ind, :]
+                real_ampl = real_ampl[remaining_src_ind][sort_ind]
+                orders = res_dict["orders"][remaining_src_ind][sort_ind]
+
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
-            # unique matches, looking only at the True positives with maximum amplitude
-            inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=reconstr_ampl)
-            ind_tol = dist < tol
+            # unique matches, looking only at the True positives at minimum distance
+            inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=None)
 
+            ind_tol = dist < tol
             mean_tp_dist = dist[ind_tol].mean()  # mean distance across recovered sources
             sorted_ampl_reconstr = reconstr_ampl[inda][ind_tol]
             sorted_ampl_exact = real_ampl[indb][ind_tol]
@@ -114,13 +147,8 @@ if __name__ == "__main__":
 
             # mean distance to real sources for the best recovered sources
             mean_recov_dist = dist[dist < tol].mean()
-
-            if ctp == nb_needed:  # all sources are retrieved
-                break_dist = np.max(dist)
-            else:  # look at the minimal distance for the false negatives
-                break_dist = np.min(dist[dist >= tol])
             entry = dict(exp_id=i, nb_found=nb_found, nb_recov=ctp,
-                         mean_tp_dist=mean_tp_dist, mean_recov_dist=mean_recov_dist,  break_dist=break_dist,
+                         mean_tp_dist=mean_tp_dist, mean_recov_dist=mean_recov_dist,
                          ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
             exp_df = exp_df.append(entry, ignore_index=True)
 
