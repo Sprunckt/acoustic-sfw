@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Union, Tuple
 from scipy.optimize import minimize
+from optimparallel import minimize_parallel
 from sklearn.linear_model import Lasso
 from src.simulation.utils import (disp_measure, c, cut_vec_rir)
 import multiprocessing
@@ -357,7 +358,7 @@ class SFW(ABC):
 
             tstart = time.time()
 
-            opti_res = minimize(self._obj_slide, ini, jac=slide_jac, method="L-BFGS-B", bounds=bounds)
+            opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac, bounds=bounds)
             mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
             decreased_energy = val_fin < ini_val
 
