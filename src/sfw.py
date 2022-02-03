@@ -99,12 +99,12 @@ class SFW(ABC):
 
         return 0.5 * np.sum((self.gamma(a, self.xkp) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
-    def _obj_slide(self, var):
+    def _obj_slide(self, var, y, n_spikes):
         """
         Objective function for the sliding step (optimization on locations and amplitude).
         """
-        a, x = var[:self.n_active], var[self.n_active:].reshape(-1, self.d)
-        return 0.5 * np.sum((self.gamma(a, x) - self.y_freeze) ** 2) + self.lam * np.sum(np.abs(a))
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
+        return 0.5 * np.sum((self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
 
     def _optigrid(self, x):
         return minimize(self.eta, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
@@ -204,7 +204,8 @@ class SFW(ABC):
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
-                    plot=False, algo_start_cb=None, it_start_cb=None, freeze_step=0) -> (np.ndarray, np.ndarray):
+                    plot=False, algo_start_cb=None, it_start_cb=None,
+                    freeze_step=0, resliding_step=0) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -222,10 +223,14 @@ class SFW(ABC):
         optimization on each point of the grid before refining on the best position. If "full" : perform a fine
         optimization on each grid point (costly). If "naive" : find the best value on the grid and use it as
         initialization (fastest but less precize).
+            -spherical_search (int) : if equal to 1 : assume that the given grid is spherical. The maximum energy spike
+        of the residual is used to find the distance from a microphone to an image source, and applying a grid search
+        on the corresponding sphere.
             -freeze_step (int) : if strictly positive : check each spike every 'freeze_step' iterations. If the spike
         has not moved sufficiently since the last check, the spike is frozen and is not allowed to slide in the next
         iterations. Speeds up the execution when the number of iterations becomes important, but lessens the accuracy.
-
+            -resliding_step (int) : if strictly positive : apply a periodic sliding step on all the spikes (including
+        the frozen ones).
          Return:
             (ak, xk) where :
             -ak is a flat array of shape (K,) containing the amplitudes of the recovered measure
@@ -329,8 +334,8 @@ class SFW(ABC):
                 self.xkp = np.concatenate([self.xk, x_new], axis=0)
             else:
                 self.xkp = np.array([x_new]).reshape(1, self.d)
-            self.nk += 1
-
+            self.nk += 1  # increment the number of spikes
+            self.n_active += 1  # increment the number of active spikes
             if verbose:
                 print("Optimizing for spike amplitudes --------")
 
@@ -343,14 +348,16 @@ class SFW(ABC):
                                                                                time.time() - tstart))
                 print("New amplitudes : {} \n".format(ak_new))
 
-            # solve to adjust both the positions and amplitudes
+            # sliding step : optimize to adjust both the positions and amplitudes
 
-            self.n_active += 1  # increment the number of active spikes
+            # bounds for the amplitudes and positions
+            bounds = [(amin, amax)] * self.n_active + [(xmin, xmax)] * self.n_active * self.d
+
             tmp_active = np.append(self.active_spikes, [True])
             ini = np.concatenate([ak_new[tmp_active],
                                   self.xkp[tmp_active].flatten()])
-            bounds = [(amin, amax)] * self.n_active + [(xmin, xmax)] * self.n_active * self.d
-            ini_val = self._obj_slide(ini)
+
+            ini_val = self._obj_slide(ini, y=self.y_freeze, n_spikes=self.n_active)
 
             if verbose:
                 print("Sliding step --------")
@@ -358,7 +365,8 @@ class SFW(ABC):
 
             tstart = time.time()
 
-            opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac, bounds=bounds)
+            opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac, bounds=bounds,
+                                         args=(self.y_freeze, self.n_active))
             mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
             decreased_energy = val_fin < ini_val
 
@@ -379,13 +387,41 @@ class SFW(ABC):
                                                                                          time.time() - tstart))
                 print("Objective value : {}".format(val_fin))
 
+            if resliding_step:
+                reslide_counter += 1
+                if reslide_counter >= resliding_step:
+                    bounds = [(amin, amax)] * self.nk + [(xmin, xmax)] * self.nk * self.d
+                    ini = np.concatenate([self.ak, self.xk.flatten()])
+                    ini_val = self._obj_slide(ini, y=self.y, n_spikes=self.nk)
+                    if verbose:
+                        print("Periodic sliding step on every spike ---")
+                    tstart = time.time()
+                    opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac,
+                                                 bounds=bounds, args=(self.y, self.nk))
+                    mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
+                    tend = time.time()
+                    if verbose:
+                        print("Initial/final values : {} {} \n".format(ini_val, val_fin))
+                        print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
+                                                                                                 tend - tstart))
+
+                    if not opti_res.success:
+                        print("Last optimization failed, reason : {}".format(opti_res.message))
+
+                    if val_fin < ini_val:  # check if the energy has decreased
+                        self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
+                        reslide_counter = 0
+                    else:
+                        if verbose:
+                            print("Energy increased, sliding not applied - retrying next iteration")
+
             # deleting null amplitude spikes
             ind_null = np.asarray(np.abs(self.ak) < sfw_tol)
             self.ak = self.ak[~ind_null]
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
 
-            if freeze_step:  # update the frozen spikes
+            if freeze_step:  # update the frozen spikes history
                 self._append_history(self.ak[self.nk-1:], self.xk[self.nk-1].reshape(1, 3))
                 self._update_history(ind_null)  # if the new spike is null it is instantly deleted
                 if verbose:
@@ -676,32 +712,31 @@ class TimeDomainSFW(SFW):
 
         return -np.sign(self.etak_norm1(x)) * (der_gam + der_N) / self.lam
 
-    def _jac_slide_obj(self, var):
-        a, x = var[:self.n_active], var[self.n_active:].reshape(-1, self.d)
+    def _jac_slide_obj(self, var, y, n_spikes):
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
         diff = x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]  # difference, shape (M, K, 3)
         # distances from the diracs contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum(diff ** 2, axis=2))
 
-        jac = np.zeros(self.n_active * 4)
+        jac = np.zeros(n_spikes * 4)
 
         int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
         # shape (M, K, N) = gamma_j(x_k)
         gamma_tens = (self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis])
 
         # sum_k ak.gamma_j(x_k) - y_j : sum(M, K, N, axis=1) - y = -residue
-        residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - self.y_freeze)
+        residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - y)
         # derivates in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
-        jac[:self.n_active] = (np.sum(residue.reshape(self.M, self.N)[:, np.newaxis, :] * gamma_tens, axis=(0, 2))
-                               + self.lam * np.sign(a))
+        jac[:n_spikes] = (np.sum(residue.reshape(self.M, self.N)[:, np.newaxis, :] * gamma_tens, axis=(0, 2))
+                          + self.lam * np.sign(a))
 
         # shape (M, K, N), derivate without the xk_i - xm_i factor
         gamma_tens = ((- gamma_tens - self.sinc_der(int_term) / 4 / np.pi / c)
                       / dist[:, :, np.newaxis] ** 2 * residue.reshape(self.M, self.N)[:, np.newaxis, :])
 
         # original shape (M,K,3,N)
-        jac[self.n_active:] = (np.repeat(a, 3) * np.sum(gamma_tens[:, :, np.newaxis, :]
-                                                        * diff[:, :, :, np.newaxis],
-                                                        axis=(0, 3)).flatten())
+        jac[n_spikes:] = (np.repeat(a, 3) * np.sum(gamma_tens[:, :, np.newaxis, :] * diff[:, :, :, np.newaxis],
+                                                   axis=(0, 3)).flatten())
         return jac
 
     def _grid_initialization_function(self, grid, verbose):
@@ -888,10 +923,10 @@ class FrequencyDomainSFW(SFW):
         slide_jac = "3-point"
         return normalized_eta, normalized_eta_jac, slide_jac
 
-    def _obj_slide(self, var):
+    def _obj_slide(self, var, y, n_spikes):
         """
         Objective function for the sliding step, adapted for complex values
         """
 
         a, x = var[:self.nk], var[self.nk:].reshape(-1, self.d)
-        return 0.5 * np.sum(np.abs(self.gamma(a, x) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
+        return 0.5 * np.sum(np.abs(self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
