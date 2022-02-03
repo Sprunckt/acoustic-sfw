@@ -1,4 +1,4 @@
-from src.sfw import TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW
+from src.sfw import TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW, compute_time_sample
 import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
@@ -165,8 +165,8 @@ if __name__ == "__main__":
         x = x @ inv_rot_walls.as_matrix()
         s.mic_pos = s.mic_pos @ inv_rot_walls.as_matrix()
 
-        if domain != "frequential":  # extend the RIR to the maxium length
-            s.N = s.global_N
+        if domain != "frequential":  # extend the RIR to the maximum length
+            s.NN = compute_time_sample(s.global_N, s.fs)
 
         reconstr_rir = s.gamma(a, x)
 
