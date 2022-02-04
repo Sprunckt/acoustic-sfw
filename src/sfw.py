@@ -245,6 +245,8 @@ class SFW(ABC):
         self.freeze_step = freeze_step
 
         ncores = multiprocessing.cpu_count()
+        reslide_counter = 0
+
         search_grid = grid
         assert search_grid is not None, "a grid must be specified for the initial grid search"
 
