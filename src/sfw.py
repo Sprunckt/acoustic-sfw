@@ -570,24 +570,29 @@ class TimeDomainSFW(SFW):
 
     def _iteration_start_callback(self, verbose=False):
         self.swap_counter += 1
-        curr_ind = self.current_ind
         curr_norm, thresh = self.res_norm, self.swap_factor*self.old_norm
-        threshold_reached = curr_norm < thresh
+        threshold_reached = curr_norm < thresh  # norm criterion
         max_iter_reached = self.swap_counter > self.swap_frequency
-        if (curr_ind < len(self.cut_ind)  # check that the last threshold has not been reached
-                and (threshold_reached or max_iter_reached)):  # update RIR length
+        if (self.current_ind < len(self.cut_ind) - 1  # check that the last threshold has not been reached
+                and (threshold_reached or max_iter_reached)):  # check if a criterion has been reached
 
-            self.old_norm, new_thresh, new_norm = curr_norm, thresh, curr_norm
-            while new_norm < new_thresh:  # loop until the norm threshold is under the current residual norm
-                curr_ind += 1
-                # update the norm : current residual + the norm of the appended RIR segment
-                app_norm = (self.cumulated_energy[self.cut_ind[curr_ind]] -
-                            self.cumulated_energy[self.cut_ind[curr_ind-1]])
+            self.old_norm, new_thresh = curr_norm, thresh
+            self.current_ind += 1  # update the slice index
+            # update the norm : current residual + the norm of the appended RIR segment
+            app_norm = (self.cumulated_energy[self.cut_ind[self.current_ind]] -
+                        self.cumulated_energy[self.cut_ind[self.current_ind - 1]])
+            self.old_norm += app_norm
+            new_thresh = self.swap_factor * self.old_norm
+
+            while self.old_norm < new_thresh:  # repeat until the norm threshold is under the current residual norm
+                self.current_ind += 1
+                app_norm = (self.cumulated_energy[self.cut_ind[self.current_ind]] -
+                            self.cumulated_energy[self.cut_ind[self.current_ind-1]])
                 self.old_norm += app_norm
-                new_norm += app_norm
                 new_thresh = self.swap_factor*self.old_norm
-            self.current_ind = curr_ind
-            self.N = self.cut_ind[curr_ind]
+
+            # update RIR length
+            self.N = self.cut_ind[self.current_ind]
             self.NN = compute_time_sample(self.N, self.fs)
             self.y = cut_vec_rir(self.global_y, self.M, self.global_N, self.N)
             if self.freeze_step:
@@ -600,8 +605,8 @@ class TimeDomainSFW(SFW):
             self.compute_residue()
 
             if verbose:
-                print("Extending RIR from {}s to {}s after {} it".format(self.cut_ind[curr_ind - 1] / self.fs,
-                                                                         self.cut_ind[curr_ind] / self.fs,
+                print("Extending RIR from {}s to {}s after {} it".format(self.cut_ind[self.current_ind - 1] / self.fs,
+                                                                         self.cut_ind[self.current_ind] / self.fs,
                                                                          self.swap_counter))
                 if threshold_reached:
                     print("Reason : norm criterion reached : {} < {}".format(curr_norm,
