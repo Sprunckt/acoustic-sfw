@@ -9,7 +9,7 @@ import multiprocessing
 import time
 from abc import ABC, abstractmethod
 
-sfw_tol = 1e-6
+sfw_tol = 0.05
 merge_tol = 0.02
 
 ampl_freeze_threshold = 0.05
@@ -201,6 +201,9 @@ class SFW(ABC):
         self.old_xk[ind_active_mod] = self.xk[ind_active_mod]
         self.n_active = self.active_spikes.sum()
 
+    def _on_stop(self, verbose=False):
+        return True
+
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
@@ -329,7 +332,8 @@ class SFW(ABC):
             if use_hard_stop and etaval <= 1 + sfw_tol:
                 if verbose:
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
-                return self._stop(verbose=verbose)
+                if self._on_stop():
+                    return self._stop(verbose=verbose)
 
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
             if self.nk > 0:
@@ -438,8 +442,9 @@ class SFW(ABC):
             # last spike is null and minor changes from the previous iteration at the sliding step
             elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
                   and (nit_slide == 1 or not decreased_energy)):
-                print("Last spike has null amplitude, stopping")
-                return self._stop(verbose=verbose)
+                if self._on_stop():
+                    print("Last spike has null amplitude, stopping")
+                    return self._stop(verbose=verbose)
 
             if spike_merging:
                 if verbose:
@@ -512,13 +517,15 @@ class TimeDomainSFW(SFW):
                                                        self.mic_pos[:, np.newaxis, :])**2, axis=-1)))
 
         # variables used to extend the time interval progressively
-        partial_rir = self.y[:self.global_N]  # RIR for the first microphone
-        self.cumulated_energy = np.sqrt(np.cumsum(partial_rir ** 2))
+        mc_rir = self.y.reshape(self.M, self.N)  # multi-channel RIR
+        # cumulated energy, mean on the microphones
+        self.cumulated_energy = np.mean(np.sqrt(np.cumsum(mc_rir ** 2, axis=1)), axis=0)
         self.cut_ind = None  # indexes for cutting the RIR
+        self.n_cut = 0
         self.swap_counter = -1  # number of full iterations since last extension
         self.swap_factor = 0.  # growth criterion on the residual norm to extend the RIR
         self.swap_frequency = 0  # number of iterations before extending the RIR
-        self.res_norm = np.linalg.norm(partial_rir)  # norm of the first RIR
+        self.res_norm = self.cumulated_energy[-1]  # norm of the first RIR
         self.old_norm = self.res_norm
         self.current_ind = 0  # index of the last cutting threshold used
         assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
@@ -535,7 +542,7 @@ class TimeDomainSFW(SFW):
         if int_start is None:
             int_start = int_end / 3.
 
-        cut_values = np.logspace(np.log(int_start), np.log(int_end), n_cut, base=np.e, endpoint=False)
+        cut_values = np.linspace(int_start, int_end, n_cut, endpoint=False)
 
         if n_cut > 0:
             overshoot = int(self.fs * self.antenna_diameter / c)  # worst minimal time to go through the antenna
@@ -564,32 +571,19 @@ class TimeDomainSFW(SFW):
             self.swap_factor = swap_factor
             self.compute_residue()
             self.old_norm = self.res_norm
+            self.n_cut = len(self.cut_ind)
         else:
             self.cut_ind = np.empty(0)
         self.current_ind = 0
 
-    def _iteration_start_callback(self, verbose=False):
-        self.swap_counter += 1
-        curr_norm, thresh = self.res_norm, self.swap_factor*self.old_norm
-        threshold_reached = curr_norm < thresh  # norm criterion
-        max_iter_reached = self.swap_counter > self.swap_frequency
-        if (self.current_ind < len(self.cut_ind) - 1  # check that the last threshold has not been reached
-                and (threshold_reached or max_iter_reached)):  # check if a criterion has been reached
-
-            self.old_norm, new_thresh = curr_norm, thresh
+    def _extend_rir(self, reason, verbose=False):
+        if self.current_ind < self.n_cut - 1:  # check that the last threshold has not been reached
+            self.old_norm = self.res_norm
             self.current_ind += 1  # update the slice index
             # update the norm : current residual + the norm of the appended RIR segment
             app_norm = (self.cumulated_energy[self.cut_ind[self.current_ind]] -
                         self.cumulated_energy[self.cut_ind[self.current_ind - 1]])
             self.old_norm += app_norm
-            new_thresh = self.swap_factor * self.old_norm
-
-            while self.old_norm < new_thresh:  # repeat until the norm threshold is under the current residual norm
-                self.current_ind += 1
-                app_norm = (self.cumulated_energy[self.cut_ind[self.current_ind]] -
-                            self.cumulated_energy[self.cut_ind[self.current_ind-1]])
-                self.old_norm += app_norm
-                new_thresh = self.swap_factor*self.old_norm
 
             # update RIR length
             self.N = self.cut_ind[self.current_ind]
@@ -608,13 +602,25 @@ class TimeDomainSFW(SFW):
                 print("Extending RIR from {}s to {}s after {} it".format(self.cut_ind[self.current_ind - 1] / self.fs,
                                                                          self.cut_ind[self.current_ind] / self.fs,
                                                                          self.swap_counter))
-                if threshold_reached:
-                    print("Reason : norm criterion reached : {} < {}".format(curr_norm,
-                                                                             thresh))
-                else:
-                    print("Reason :  max iteration reached")
+                print("Reason : {}".format(reason))
 
             self.swap_counter = 0
+            return True
+        else:
+            return False
+
+    def _on_stop(self, verbose=False):
+        return not self._extend_rir(reason="stopping criterion met", verbose=verbose)
+
+    def _iteration_start_callback(self, verbose=False):
+        self.swap_counter += 1
+        curr_norm, thresh = self.res_norm, self.swap_factor*self.old_norm
+        threshold_reached = curr_norm < thresh  # norm criterion
+        max_iter_reached = self.swap_counter > self.swap_frequency
+        if threshold_reached:
+            self._extend_rir("norm criterion reached: {} < {}".format(curr_norm, thresh), verbose=verbose)
+        elif max_iter_reached:
+            self._extend_rir("max iteration reached", verbose=verbose)
 
     def sinc_filt(self, t):
         """
@@ -642,7 +648,7 @@ class TimeDomainSFW(SFW):
     def compute_residue(self):
         gk = self.gamma(self.ak, self.xk)
         self.res = self.y - gk
-        self.res_norm = np.linalg.norm(self.res[:self.N])  # residual norm of the first RIR
+        self.res_norm = np.mean(np.linalg.norm(self.res.reshape(self.M, self.N), axis=1), axis=0)  # mean residual norm
 
         return self.res
 
