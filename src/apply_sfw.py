@@ -7,6 +7,7 @@ from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save
 from src.visualization import plot_room
 from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
+import getopt
 import sys
 import pandas as pd
 import time
@@ -20,22 +21,40 @@ ideal = True  # if True, use the observation operator to reconstruct the measure
 save_path = "experiments/rdb3_freq/eps_0.01"
 
 # path to the parameter json files used for the simulation
-paths = ["room_db3/exp_{}_param.json".format(i) for i in range(0, 100)]
+exp_paths = "room_db3"
 
 if __name__ == "__main__":
-    # if an additionnal argument is given in command line : use it as the experiment directory
-    if len(sys.argv) > 1:
-        save_path = sys.argv[1]
+
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], '', ['path=', 'exp=', 'exp_path='])
+
+    except getopt.GetoptError:
+        print("apply_sfw.py [--path=] [--exp=] [--exp_path]\n"
+              "--path= : directory where the results will be saved \n"
+              "--exp_path= : directory containing the experiment parameters \n"
+              "--exp= : two integers, separated by a comma, that give the range of experience IDs that will be"
+              "considered in the folder. Ex : 4,9 will apply SFW to the experiences 4 to 8.")
+        sys.exit(1)
+
+    ind_start, ind_end = 0, 50
+    for opt, arg in opts:
+        if opt == '--path':
+            save_path = arg
+        elif opt == '--exp':
+            ind_start, ind_end = [int(t) for t in arg.split(',')]
+        elif opt == '--exp_path':
+            exp_paths = arg
+
+    paths = [os.path.join(exp_paths, "exp_{}_param.json".format(i)) for i in range(ind_start, ind_end)]
 
     if not os.path.exists(save_path):
         os.mkdir(save_path)
 
     df_path = os.path.join(save_path, "results.csv")
-    if not os.path.exists(df_path):
+    if not os.path.exists(df_path):  # create the dataframe if it does not exist
         df_res = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov", "corr_ampl",
                                        "min_dist", "max_dist_global", "max_dist", "mean_dist"])
-    else:
-        df_res = pd.read_csv(df_path)
+        df_res.to_csv(df_path, index=False)
 
     # path to a json file containing additional parameters used for all simulations (eg grid spacing)
     meta_param_path = os.path.join(save_path, "parameters.json")
@@ -203,6 +222,8 @@ if __name__ == "__main__":
 
         res = dict(exp_id=curr_save_path, nb_found=len(a), nb_recov=nb_recov, corr_ampl=correlation_ampl,
                    min_dist=np.min(dist), max_dist_global=max_dist_global, max_dist=np.max(dist), mean_dist=mean_dist)
+        # re-read the CSV in case it has been modified by another process
+        df_res = pd.read_csv(df_path)
         df_res = df_res.append(res, ignore_index=True)
         df_res.to_csv(df_path, index=False)
 
