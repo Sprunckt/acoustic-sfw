@@ -8,7 +8,7 @@ from src.simulation.utils import (disp_measure, c, cut_vec_rir)
 import multiprocessing
 import time
 from abc import ABC, abstractmethod
-
+import os
 sfw_tol = 0.05
 merge_tol = 0.02
 
@@ -247,7 +247,10 @@ class SFW(ABC):
         self.nk = 0
         self.freeze_step = freeze_step
 
-        ncores = multiprocessing.cpu_count()
+        ncores = len(os.sched_getaffinity(0))
+        if verbose:
+            print("Executing on {} cores".format(ncores))
+            
         reslide_counter = 0
 
         search_grid = grid
@@ -262,7 +265,7 @@ class SFW(ABC):
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
         self._algorithm_start_callback(**algo_start_cb)
-
+ 
         for i in range(niter):
             self.it += 1
             if verbose:
@@ -372,7 +375,7 @@ class SFW(ABC):
             tstart = time.time()
 
             opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac, bounds=bounds,
-                                         args=(self.y_freeze, self.n_active))
+                                         args=(self.y_freeze, self.n_active), parallel={'max_workers': ncores})
             mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
             decreased_energy = val_fin < ini_val
 
