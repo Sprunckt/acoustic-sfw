@@ -155,7 +155,7 @@ class TestEta(unittest.TestCase):
         # point used for comparison
         var = np.arange(1, sfw.nk*4 + 1)
 
-        sfw_jac = sfw._jac_slide_obj(var)
+        sfw_jac = sfw._jac_slide_obj(var, y=sfw.y, n_spikes=sfw.nk)
         plain_jac = plain_slide_jac(var[:sfw.nk], var[sfw.nk:].reshape(sfw.nk, 3),
                                     y=sfw.y, fs=fs, N=N1, mic_pos=sfw.mic_pos,
                                     filt=sfw.sinc_filt, filt_der=sfw.sinc_der, lam=sfw.lam)
