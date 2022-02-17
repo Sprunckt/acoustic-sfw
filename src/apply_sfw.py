@@ -46,6 +46,7 @@ if __name__ == "__main__":
             exp_paths = arg
 
     paths = [os.path.join(exp_paths, "exp_{}_param.json".format(i)) for i in range(ind_start, ind_end)]
+    exp_ids = [i for i in range(ind_start, ind_end)]
 
     if not os.path.exists(save_path):
         os.mkdir(save_path)
@@ -60,13 +61,30 @@ if __name__ == "__main__":
     meta_param_path = os.path.join(save_path, "parameters.json")
     meta_param_dict = json_to_dict(meta_param_path)
 
+    # random numbers generator
+    rand_gen = np.random.RandomState()
+
+    # global sfw parameters
+    algo_start_cb = meta_param_dict.get("start_cb")
+    freeze_step = meta_param_dict.get("freeze_step", 0)
+    resliding_step = meta_param_dict.get("resliding_step", 0)
+    # choose to cut the rir
+    cutoff = meta_param_dict.get("cutoff", -1)
+
+    # global parameters for the set of experiments
+    lam, ideal = meta_param_dict["lambda"], meta_param_dict["ideal"]
+    fs = meta_param_dict["fs"]  # sampling frequency
+    ms = meta_param_dict.get("mic_size")  # array size factor
+    max_order = meta_param_dict["max_order"]  # maximum order of reflections used
+
+    # peak signal to noise ration
+    psnr = meta_param_dict.get("psnr")
+
     tstart = time.time()
-    for path in paths:
+    for exp_ind, path in enumerate(paths):
         print("Applying SFW to " + os.path.split(path)[-1])
         param_dict = json_to_dict(path)
-        lam, ideal = meta_param_dict["lambda"], meta_param_dict["ideal"]
-        fs = meta_param_dict["fs"]
-        ms = meta_param_dict.get("mic_size")
+
         if ms is not None:  # overwrite the microphone positions
             mic_pos = load_antenna(mic_size=ms)
         else:  # use default values
@@ -99,9 +117,6 @@ if __name__ == "__main__":
         mic_pos += param_dict["origin"]
         origin = param_dict["origin"]
 
-        # maximum order of reflections used
-        max_order = meta_param_dict["max_order"]
-
         # choose to apply varying absorption rates or a default rate for each wall
         use_abs = meta_param_dict.get("use_absorption")
         if use_abs:
@@ -109,35 +124,45 @@ if __name__ == "__main__":
         else:
             absorptions = None
 
-        # choose to cut the rir
-        cutoff = meta_param_dict.get("cutoff", -1)
-
         # simulate the RIR, the center of the antenna is chosen as the new origin
         measurements, N, src, ampl, mic_pos, orders = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos,
                                                                    mic_array=mic_pos, origin=origin,
                                                                    max_order=max_order, absorptions=absorptions,
                                                                    cutoff=cutoff)
         domain = meta_param_dict.get("domain")
+        if domain is None:
+            print("No domain provided, considering the time domain by dfault")
+            domain = "time"
+
+        if domain in ["frequential", "time"]:
+            sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+        elif domain == "time_epsilon":
+            eps = meta_param_dict.get("eps")
+            if eps is None:
+                print("epsilon must be provided")
+                exit(1)
+            sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam, eps=eps)
+        else:
+            sfw_init_args = {}
+            print("invalid domain type")  # should not be reached
+            exit(1)
 
         if ideal:  # exact theoretical observations
             if domain == "frequential":
-                s = FrequencyDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+                s = FrequencyDomainSFW(y=(ampl, src), **sfw_init_args)
                 measurements = s.time_sfw.y.copy()
             elif domain == "time_epsilon":
-                eps = meta_param_dict.get("eps")
-                if eps is None:
-                    print("epsilon must be provided")
-                    exit(1)
-
-                s = EpsilonTimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam, eps=eps)
-                measurements = s.y.copy()
+                s = EpsilonTimeDomainSFW(y=(ampl, src), **sfw_init_args)
+                measurements = s.y
             else:
-                s = TimeDomainSFW(y=(ampl, src), mic_pos=mic_pos, fs=fs, N=N, lam=lam)
-                measurements = s.y.copy()
+                s = TimeDomainSFW(y=(ampl, src), **sfw_init_args)
+                measurements = s.y
+
         else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
             if domain == "frequential":
                 s = FrequencyDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
             else:
+                sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
                 s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
         # maximum reachable distance
@@ -165,16 +190,19 @@ if __name__ == "__main__":
         stdout = sys.stdout
 
         # apply a transformation to the room coordinates (done after creating the observations)
-        rot_walls = meta_param_dict.get("rotation_walls")  # overwite the room rotation
+        rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
         if rot_walls is None:  # using the rotation specific to the room
             rot_walls = param_dict.get("rotation_walls")
         rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
         inv_rot_walls = rot_walls.inv()
         s.mic_pos = mic_pos @ rot_walls.as_matrix()
 
-        algo_start_cb = meta_param_dict.get("start_cb")
-        freeze_step = meta_param_dict.get("freeze_step", 0)
-        resliding_step = meta_param_dict.get("resliding_step", 0)
+        if psnr is not None:  # add noise (unsupported for frequential domain)
+            rand_gen.seed(exp_ids[exp_ind])
+            std = np.max(np.abs(s.y))*10**(-psnr/20)
+            new_y = s.y + rand_gen.normal(0, std, s.y.shape)
+            measurements = new_y.copy()  # update the measurements to save the target RIR
+            s.__init__(y=new_y, **sfw_init_args)
 
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
