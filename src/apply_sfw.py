@@ -131,7 +131,7 @@ if __name__ == "__main__":
                                                                    cutoff=cutoff)
         domain = meta_param_dict.get("domain")
         if domain is None:
-            print("No domain provided, considering the time domain by dfault")
+            print("No domain provided, considering the time domain by default")
             domain = "time"
 
         if domain in ["frequential", "time"]:
@@ -189,20 +189,20 @@ if __name__ == "__main__":
         spherical_search = meta_param_dict.get("spherical_search", 0)
         stdout = sys.stdout
 
-        # apply a transformation to the room coordinates (done after creating the observations)
-        rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
-        if rot_walls is None:  # using the rotation specific to the room
-            rot_walls = param_dict.get("rotation_walls")
-        rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
-        inv_rot_walls = rot_walls.inv()
-        s.mic_pos = mic_pos @ rot_walls.as_matrix()
-
         if psnr is not None:  # add noise (unsupported for frequential domain)
             rand_gen.seed(exp_ids[exp_ind])
             std = np.max(np.abs(s.y))*10**(-psnr/20)
             new_y = s.y + rand_gen.normal(0, std, s.y.shape)
             measurements = new_y.copy()  # update the measurements to save the target RIR
             s.__init__(y=new_y, **sfw_init_args)
+
+            # apply a transformation to the room coordinates (done after creating the observations)
+            rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
+            if rot_walls is None:  # using the rotation specific to the room
+                rot_walls = param_dict.get("rotation_walls")
+            rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
+            inv_rot_walls = rot_walls.inv()
+            s.mic_pos = mic_pos @ rot_walls.as_matrix()
 
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
