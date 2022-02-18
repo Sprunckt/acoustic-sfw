@@ -202,6 +202,8 @@ class SFW(ABC):
         self.n_active = self.active_spikes.sum()
 
     def _on_stop(self, verbose=False):
+        """Method called when a stopping criterion is met, should return True if the algorithm has to stop on the spot,
+        False if it is allowed to go on through (for example if the RIR is not extended to its full length)."""
         return True
 
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
@@ -337,6 +339,8 @@ class SFW(ABC):
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
                 if self._on_stop():
                     return self._stop(verbose=verbose)
+                else:
+                    continue
 
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
             if self.nk > 0:
@@ -430,9 +434,9 @@ class SFW(ABC):
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
 
-            if freeze_step:  # update the frozen spikes history
+            if freeze_step and self.nk > 0:  # update the frozen spikes history
                 self._append_history(self.ak[self.nk-1:], self.xk[self.nk-1].reshape(1, 3))
-                self._update_history(ind_null)  # if the new spike is null it is instantly deleted
+                self._update_history(ind_null)  # if the new spike is null it is instantly deleted. todo: clean this
                 if verbose:
                     print("active spikes : \n", np.where(self.active_spikes)[0])
             else:  # all the spikes are active
@@ -440,14 +444,19 @@ class SFW(ABC):
                 self.n_active = self.nk
 
             if self.nk == 0:
-                print("Error : all spikes are null")
-                return
+                if self._on_stop():
+                    print("Error : all spikes are null, stopping")
+                    return self._stop(verbose=verbose)
+                else:
+                    continue
             # last spike is null and minor changes from the previous iteration at the sliding step
             elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
                   and (nit_slide == 1 or not decreased_energy)):
                 if self._on_stop():
                     print("Last spike has null amplitude, stopping")
                     return self._stop(verbose=verbose)
+                else:
+                    continue
 
             if spike_merging:
                 if verbose:
@@ -613,6 +622,8 @@ class TimeDomainSFW(SFW):
             return False
 
     def _on_stop(self, verbose=False):
+        """Should return False if the RIR can be extended (meaning the algorithm is allowed to pull through), True
+        otherwise."""
         return not self._extend_rir(reason="stopping criterion met", verbose=verbose)
 
     def _iteration_start_callback(self, verbose=False):
