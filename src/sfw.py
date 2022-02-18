@@ -152,6 +152,7 @@ class SFW(ABC):
         pass
 
     def compute_residue(self):
+        """Compute and update the residue."""
         gk = self.gamma(self.ak, self.xk)
         self.res = self.y - gk
 
@@ -173,6 +174,8 @@ class SFW(ABC):
         self.active_spikes = np.append(self.active_spikes, True)
 
     def _update_history(self, ind_to_delete):
+        """Update the active spikes based on the given null amplitude indices. Checks for the spike that should be
+        frozen based on the distance they moved since their last checkup."""
         if np.any(ind_to_delete):  # only keep the non-zero spikes
             self.old_xk = self.old_xk[~ind_to_delete]
             self.old_ak = self.old_ak[~ind_to_delete]
@@ -222,7 +225,7 @@ class SFW(ABC):
         normalization, 1 adds a factor 1/(sqrt(sum(1/dist(x, xm)**2))
             -min_norm (float) : minimal norm allowed for the position found at the end of the grid search
             -max_norm (float) : used as bounds for the coordinates of the spike locations in each direction
-            -use_hard_stop (bool) : if True, add |etak| < 1 as a stopping condition
+            -use_hard_stop (bool) : if True, add max|etak| <= 1 as a stopping condition
             -early_stopping (bool) : if True, stop at the end of an iteration if the last spike found has zero amplitude
             -search_method (str) : grid search methods for the spike position search. If "rough" : perform a coarse
         optimization on each point of the grid before refining on the best position. If "full" : perform a fine
@@ -231,6 +234,8 @@ class SFW(ABC):
             -spherical_search (int) : if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
         on the corresponding sphere.
+            - algo_start_cb (dict) : dictionary containing the arguments passed to the algorithm start callback
+            it_start_cb (dict) : dictionary containing the arguments passed to the iteration start callback
             -freeze_step (int) : if strictly positive : check each spike every 'freeze_step' iterations. If the spike
         has not moved sufficiently since the last check, the spike is frozen and is not allowed to slide in the next
         iterations. Speeds up the execution when the number of iterations becomes important, but lessens the accuracy.
@@ -334,7 +339,7 @@ class SFW(ABC):
                 print("Optimization converged in {} iterations".format(nit))
                 print("New position : {} \n eta value : {}".format(x_new, etaval))
 
-            if use_hard_stop and etaval <= 1 + sfw_tol:
+            if use_hard_stop and etaval <= 1:
                 if verbose:
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
                 if self._on_stop():
