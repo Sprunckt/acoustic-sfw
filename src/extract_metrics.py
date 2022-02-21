@@ -42,12 +42,14 @@ if __name__ == "__main__":
               "--method= : method used to identify which true sources to consider. Available methods : \n"
               "   -amplitude : rank by decreasing amplitudes \n"
               "   -distance : rank by increasing distance \n"
+              "   -order : extract all the image sources of a given order. The order can be specified with the n_src"
+              "argument. \n"
               "--delimiter= : delimiting threshold for the distance method : only consider the true sources that are at"
               "a distance inferior or equal to 'delimiter'. Same behavior for the predicted sources, with a maximal"
               "distance of 'delimiter' + tol.\n"
-              "method == distance."
               "--n_src : number of sources considered for the reconstruction. If not specified, all the theoretical"
-              "sources recoverable for the given method and delimiter are considered \n"
+              "sources recoverable for the given method and delimiter are considered. If method == order, n_src refers"
+              "to the image source order considered.\n"
               "--n_plot= : number of data points for a recall/precision curve in function "
               "of the tolerance threshold \n"
               "-s : show the plots after saving")
@@ -95,12 +97,14 @@ if __name__ == "__main__":
             res_dict = json_to_dict(complete_path)
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
+            orders = res_dict["orders"]
 
             # only consider n_src sources, or every source if n_src = 0
             if method == "amplitude":  # sort according to amplitudes
                 sort_ind = np.argsort(real_ampl)
                 real_sources, real_ampl = real_sources[sort_ind[-n_src:], :], real_ampl[sort_ind[-n_src:]]
-                orders = res_dict["orders"][sort_ind[-n_src:]]
+                orders = orders[sort_ind[-n_src:]]
+
             elif method == "distance":  # sort according to the distances
                 mic_array = res_dict["mic_array"]
                 # distances between sources and microphones
@@ -117,7 +121,11 @@ if __name__ == "__main__":
 
                 real_sources = real_sources[remaining_src_ind][sort_ind, :]
                 real_ampl = real_ampl[remaining_src_ind][sort_ind]
-                orders = res_dict["orders"][remaining_src_ind][sort_ind]
+                orders = orders[remaining_src_ind][sort_ind]
+
+            elif method == "order":  # extract according to source order
+                source_index = orders == n_src
+                real_sources, real_ampl = real_sources[source_index, :], real_ampl[source_index]
 
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
@@ -170,5 +178,8 @@ if __name__ == "__main__":
                      precision=tp/(tp+fp), recall=tp/(tp+fn))
 
         df = df.append(entry, ignore_index=True)
+
+    if not os.path.exists(save_path):
+        os.mkdir(save_path)
 
     df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
