@@ -87,14 +87,19 @@ if __name__ == "__main__":
                                        "mean_tp_dist", "mean_recov_dist",
                                        "ampl_corr", "ampl_rel_error"])
         thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
-        tp, fp, fn,  = 0, 0, 0
+        tp, fp, fn = 0, 0, 0
         global_tp, global_fp = np.zeros_like(thresholds), np.zeros_like(thresholds)
         global_fn = np.zeros_like(thresholds)
 
         for i in range(n_res):  # loop over every experiment
             complete_path = os.path.join(path, "exp_{}_res.json".format(i))
 
-            res_dict = json_to_dict(complete_path)
+            try:
+                res_dict = json_to_dict(complete_path)
+            except FileNotFoundError:
+                print(complete_path + " not found, continuing \n")
+                continue
+
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
             orders = res_dict["orders"]
@@ -126,7 +131,10 @@ if __name__ == "__main__":
             elif method == "order":  # extract according to source order
                 source_index = orders == n_src
                 real_sources, real_ampl = real_sources[source_index, :], real_ampl[source_index]
-
+            else:
+                print("method option not recognized. \n"
+                      "method should be in ['amplitude', 'order', 'distance']")
+                exit(1)
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
             # unique matches, looking only at the True positives at minimum distance
