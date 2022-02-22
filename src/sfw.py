@@ -308,6 +308,15 @@ class SFW(ABC):
                     if el.fun < curr_min and np.linalg.norm(el.x) > min_norm:
                         curr_min = el.fun
                         curr_opti_res = el
+
+                if curr_opti_res is None:  # it means the spikes found are all inside the ball of radius min_norm
+                    if verbose:
+                        print("Cannot find a spike outside the minimal norm ball")
+                    if self._on_stop():
+                        return self._stop(verbose=verbose)
+                    else:
+                        continue
+
                 if rough_search:  # perform a finer optimization using the position found as initialization
                     nit = curr_opti_res.nit
                     self.opt_options["gtol"] = 1e-6
