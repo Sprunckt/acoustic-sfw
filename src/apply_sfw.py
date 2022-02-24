@@ -77,13 +77,20 @@ if __name__ == "__main__":
     ms = meta_param_dict.get("mic_size")  # array size factor
     max_order = meta_param_dict["max_order"]  # maximum order of reflections used
 
-    # peak signal to noise ration
+    # peak signal to noise ration for the decorrelated noise
     psnr = meta_param_dict.get("psnr")
+
+    # psnr for the correlated noise
+    psnr_corr = meta_param_dict.get("psnr_corr")
 
     tstart = time.time()
     for exp_ind, path in enumerate(paths):
         print("Applying SFW to " + os.path.split(path)[-1])
+        # parameters specific to the current room experience
         param_dict = json_to_dict(path)
+
+        # setting the seed to get consistant results between runs for a same room id
+        rand_gen.seed(exp_ids[exp_ind])
 
         if ms is not None:  # overwrite the microphone positions
             mic_pos = load_antenna(mic_size=ms)
@@ -189,20 +196,43 @@ if __name__ == "__main__":
         spherical_search = meta_param_dict.get("spherical_search", 0)
         stdout = sys.stdout
 
+        added_noise = np.zeros_like(s.y)
         if psnr is not None:  # add noise (unsupported for frequential domain)
-            rand_gen.seed(exp_ids[exp_ind])
             std = np.max(np.abs(s.y))*10**(-psnr/20)
-            new_y = s.y + rand_gen.normal(0, std, s.y.shape)
+            added_noise = added_noise + rand_gen.normal(0, std, s.y.shape)
+
+        if psnr_corr is not None:  # add a sound source emitting blank noise somewhere in the room
+            noise_pos = param_dict.get("noise_pos")
+            if noise_pos is None:
+                print("The position of the noise source must be specified")
+
+            noise_rir, N_noise, _, _, _, _ = simulate_rir(fs=fs, room_dim=room_dim, src_pos=noise_pos,
+                                                          mic_array=mic_pos, origin=origin, max_order=max_order,
+                                                          absorptions=absorptions, cutoff=cutoff)
+            assert N == N_noise, "the length of the RIR at the noise position should be the same as the original RIR"
+
+            # noise source emitting on at least N time samples
+            noise = rand_gen.normal(0, 1, size=N)
+            M = mic_pos.shape[0]
+            noise_rir = noise_rir.reshape(M, N_noise)  # reshape to convolve on every microphone
+            for i in range(M):
+                noise_rir[i] = np.convolve(noise_rir[i], noise)[:N]
+
+            w = noise_rir.flatten()*10**(-psnr_corr/20)*np.max(np.abs(s.y))
+            added_noise = added_noise + w
+
+        if psnr_corr is not None or psnr is not None:  # if there is noise : update the signal
+            new_y = s.y + added_noise
             measurements = new_y.copy()  # update the measurements to save the target RIR
             s.__init__(y=new_y, **sfw_init_args)
 
-            # apply a transformation to the room coordinates (done after creating the observations)
-            rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
-            if rot_walls is None:  # using the rotation specific to the room
-                rot_walls = param_dict.get("rotation_walls")
-            rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
-            inv_rot_walls = rot_walls.inv()
-            s.mic_pos = mic_pos @ rot_walls.as_matrix()
+        # apply a transformation to the room coordinates (done after creating the observations)
+        rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
+        if rot_walls is None:  # using the rotation specific to the room
+            rot_walls = param_dict.get("rotation_walls")
+        rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
+        inv_rot_walls = rot_walls.inv()
+        s.mic_pos = mic_pos @ rot_walls.as_matrix()
 
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
