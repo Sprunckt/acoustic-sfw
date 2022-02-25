@@ -11,6 +11,15 @@ import sys
 import getopt
 
 
+def count_results(directory):
+    files = os.listdir(directory)
+    k = 0
+    for f in files:
+        if "_res.json" in f:
+            k += 1
+    return k
+
+
 def extract_subdirectories(pth):
     subdir = []
     if not os.path.exists(os.path.join(pth, 'results.csv')):
@@ -80,8 +89,7 @@ if __name__ == "__main__":
 
     df = pd.DataFrame(columns=["exp_id", "TP", "FN", "FP", "precision", "recall"])
     for path in path_list:  # loop over every directory
-        df_res = pd.read_csv(os.path.join(path, "results.csv"))
-        n_res = len(df_res)
+        n_res = count_results(path)
 
         exp_df = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov",
                                        "mean_tp_dist", "mean_recov_dist",
