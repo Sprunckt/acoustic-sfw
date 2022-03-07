@@ -4,7 +4,7 @@ Meant to be used as a script in command line.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from src.simulation.utils import json_to_dict, correlation, unique_matches
+from src.simulation.utils import json_to_dict, correlation, unique_matches, compare_arrays
 import pandas as pd
 import os
 import sys
@@ -37,52 +37,8 @@ def extract_subdirectories(pth):
     return subdir
 
 
-if __name__ == "__main__":
-
-    try:
-        paths = sys.argv[1].split(",")
-        opts, args = getopt.getopt(sys.argv[2:], '-s', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
-                                                        'n_src='])
-
-    except getopt.GetoptError:
-        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] \n"
-              "path : path to a directory or several paths separated by commas \n"
-              "--tol= : absolute tolerance \n"
-              "--method= : method used to identify which true sources to consider. Available methods : \n"
-              "   -amplitude : rank by decreasing amplitudes \n"
-              "   -distance : rank by increasing distance \n"
-              "   -order : extract all the image sources of a given order. The order can be specified with the n_src"
-              "argument. \n"
-              "--delimiter= : delimiting threshold for the distance method : only consider the true sources that are at"
-              "a distance inferior or equal to 'delimiter'. Same behavior for the predicted sources, with a maximal"
-              "distance of 'delimiter' + tol.\n"
-              "--n_src : number of sources considered for the reconstruction. If not specified, all the theoretical"
-              "sources recoverable for the given method and delimiter are considered. If method == order, n_src refers"
-              "to the image source order considered.\n"
-              "--n_plot= : number of data points for a recall/precision curve in function "
-              "of the tolerance threshold \n"
-              "-s : show the plots after saving")
-        sys.exit(1)
-
-    save_path = "."
-    n_plot, show, method, delimiter = 0, False, "distance", np.inf
-    tol, n_src = 1e-2, 0
-    for opt, arg in opts:
-        if opt == '--save_path':
-            save_path = arg
-        elif opt == '--tol':
-            tol = float(arg)
-        elif opt == '--n_src':
-            n_src = int(arg)
-        elif opt == '--n_plot':
-            n_plot = int(arg)
-        elif opt == '--method':
-            method = arg
-        elif opt == '--delimiter':
-            delimiter = float(arg)
-        elif opt == '-s':
-            show = True
-
+def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=5e-2, n_src=0,
+                unique=True):
     path_list = []
     for path in paths:
         path_list += extract_subdirectories(path)
@@ -136,8 +92,11 @@ if __name__ == "__main__":
                 real_ampl = real_ampl[remaining_src_ind][sort_ind]
                 orders = orders[remaining_src_ind][sort_ind]
 
-            elif method == "order":  # extract according to source order
+            elif method == "order":  # extract according to a given source order
                 source_index = orders == n_src
+                real_sources, real_ampl = real_sources[source_index, :], real_ampl[source_index]
+            elif method == "orderinf":  # extract all the sources of an order inferior to the given order
+                source_index = orders <= n_src
                 real_sources, real_ampl = real_sources[source_index, :], real_ampl[source_index]
             else:
                 print("method option not recognized. \n"
@@ -145,8 +104,12 @@ if __name__ == "__main__":
                 exit(1)
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
-            # unique matches, looking only at the True positives at minimum distance
-            inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=None)
+            if unique:
+                # unique matches, looking only at the True positives at minimum distance
+                inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=None)
+            else:
+                indb, dist = compare_arrays(predicted_sources, real_sources)
+                inda = np.arange(len(reconstr_ampl))
 
             ind_tol = dist < tol
             mean_tp_dist = dist[ind_tol].mean()  # mean distance across recovered sources
@@ -183,7 +146,8 @@ if __name__ == "__main__":
             plt.ylabel('recovery ratio')
             plt.xscale('log')
             plt.legend()
-            plt.savefig(os.path.join(save_path, '{}_recall_curve.pdf'.format(os.path.split(path)[-1])))
+            if save_path is not None:
+                plt.savefig(os.path.join(save_path, '{}_recall_curve.pdf'.format(os.path.split(path)[-1])))
             if show:
                 plt.show()
             else:
@@ -195,7 +159,65 @@ if __name__ == "__main__":
 
         df = df.append(entry, ignore_index=True)
 
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
+    if save_path is not None:
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
 
-    df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
+        df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
+    return df
+
+
+if __name__ == "__main__":
+
+    try:
+        paths_d = sys.argv[1].split(",")
+        opts, args = getopt.getopt(sys.argv[2:], 'su', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
+                                                       'n_src='])
+
+    except getopt.GetoptError:
+        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] [-is] \n"
+              "path : path to a directory or several paths separated by commas \n"
+              "--tol= : absolute tolerance \n"
+              "--method= : method used to identify which true sources to consider. Available methods : \n"
+              "   -amplitude : rank by decreasing amplitudes \n"
+              "   -distance : rank by increasing distance \n"
+              "   -order : extract all the image sources of a given order. The order can be specified with the n_src"
+              "argument. \n"
+              "   -orderinf : extract all the image sources for which the order is inferior to the order specified by "
+              "the n_src argument.\n"
+              "--delimiter= : delimiting threshold for the distance method : only consider the true sources that are at"
+              "a distance inferior or equal to 'delimiter'. Same behavior for the predicted sources, with a maximal"
+              "distance of 'delimiter' + tol.\n"
+              "--n_src : number of sources considered for the reconstruction. If not specified, all the theoretical"
+              "sources recoverable for the given method and delimiter are considered. If method == order, n_src refers"
+              "to the image source order considered.\n"
+              "--n_plot= : number of data points for a recall/precision curve in function "
+              "of the tolerance threshold \n"
+              "-u : allow to count the True positives multiple times for a given source. If two reconstructed sources"
+              "are close to a same image source, both are counted as True positives. By default, one True positive per"
+              "image source is possible. This option only makes sense for computing the precision."
+              "-s : show the plots after saving")
+        sys.exit(1)
+
+    save_path_d = "."
+    n_plot_d, show_d, method_d, delimiter_d = 0, False, "distance", np.inf
+    tol_d, n_src_d, unique_d = 1e-2, 0, True
+    for opt, arg in opts:
+        if opt == '--save_path':
+            save_path_d = arg
+        elif opt == '--tol':
+            tol_d = float(arg)
+        elif opt == '--n_src':
+            n_src_d = int(arg)
+        elif opt == '--n_plot':
+            n_plot_d = int(arg)
+        elif opt == '--method':
+            method_d = arg
+        elif opt == '--delimiter':
+            delimiter_d = float(arg)
+        elif opt == '-s':
+            show_d = True
+        elif opt == '-u':
+            unique_d = False
+
+    get_metrics(paths_d, save_path_d, n_plot_d, show_d, method_d, delimiter_d, tol_d, n_src_d, unique=unique_d)
