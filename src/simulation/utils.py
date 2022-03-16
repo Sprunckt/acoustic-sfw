@@ -245,3 +245,20 @@ def save_results(res_path, rir_path, image_pos, ampl, reconstr_pos, reconstr_amp
     dict_to_json(exp_res, res_path)
     dict_to_json(rir_dict, rir_path)
 
+
+def great_circle_distance(p1, p2, rad=True, normalize=False, axis=-1):
+    if normalize:
+        r1 = np.linalg.norm(p1, axis=axis)[:, np.newaxis]
+        r2 = np.linalg.norm(p2, axis=axis)[:, np.newaxis]
+        tmp1, tmp2 = p1 / r1, p2 / r2
+    else:
+        tmp1, tmp2 = p1, p2
+    res = 2*np.arcsin(np.linalg.norm(tmp1 - tmp2, axis=axis)/2.)
+    if rad:
+        return res
+    else:
+        return res * 180./np.pi
+
+
+def radial_distance(p1, p2, axis=-1):
+    return np.abs(np.linalg.norm(p1, axis=axis)-np.linalg.norm(p2, axis=axis))

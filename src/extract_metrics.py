@@ -4,7 +4,8 @@ Meant to be used as a script in command line.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from src.simulation.utils import json_to_dict, correlation, unique_matches, compare_arrays
+from src.simulation.utils import (json_to_dict, correlation, unique_matches, compare_arrays,
+                                  great_circle_distance, radial_distance)
 import pandas as pd
 import os
 import sys
@@ -37,8 +38,18 @@ def extract_subdirectories(pth):
     return subdir
 
 
-def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=5e-2, n_src=0,
-                unique=True):
+def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
+                unique=True, distance="cartesian"):
+    if tol is None:
+        if distance == 'cartesian':
+            tol = 5e-2
+        elif distance == 'spherical':
+            tol = [2e-2, 25]
+
+    assert distance in ['spherical', 'cartesian'], "invalid distance type"
+    if distance == 'spherical':
+        assert len(tol) == 2, 'tol should be a list containing the radial and angular thresholds'
+
     path_list = []
     for path in paths:
         path_list += extract_subdirectories(path)
@@ -47,9 +58,15 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
     for path in path_list:  # loop over every directory
         n_res = count_results(path)
 
-        exp_df = pd.DataFrame(columns=["exp_id", "nb_found", "nb_recov",
-                                       "mean_tp_dist", "mean_recov_dist",
-                                       "ampl_corr", "ampl_rel_error"])
+        col = ["exp_id", "nb_found", "nb_recov", "ampl_corr", "ampl_rel_error"]
+        if distance == "cartesian":
+            col.append("mean_recov_dist")
+        elif distance == "spherical":
+            col.append("mean_recov_radial_dist")
+            col.append("mean_recov_angular_dist")
+
+        exp_df = pd.DataFrame(columns=col)
+
         thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
         tp, fp, fn = 0, 0, 0
         global_tp, global_fp = np.zeros_like(thresholds), np.zeros_like(thresholds)
@@ -111,8 +128,16 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 indb, dist = compare_arrays(predicted_sources, real_sources)
                 inda = np.arange(len(reconstr_ampl))
 
-            ind_tol = dist < tol
-            mean_tp_dist = dist[ind_tol].mean()  # mean distance across recovered sources
+            if distance == "cartesian":
+                ind_tol = dist < tol
+            elif distance == "spherical":
+                dist_rad = radial_distance(predicted_sources[inda], real_sources[indb])
+                dist_circle = great_circle_distance(predicted_sources[inda], real_sources[indb],
+                                                    rad=False, normalize=True)  # circle distance in degrees
+                ind_tol = (dist_rad < tol[0]) & (dist_circle < tol[1])
+            else:
+                ind_tol = None
+
             sorted_ampl_reconstr = reconstr_ampl[inda][ind_tol]
             sorted_ampl_exact = real_ampl[indb][ind_tol]
 
@@ -120,23 +145,29 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             correlation_ampl = correlation(sorted_ampl_exact, sorted_ampl_reconstr)
             relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
             # number of distinct recovered sources
-            ctp = (dist < tol).sum()
+            ctp = ind_tol.sum()
 
             tp += ctp  # positions correctly guessed
             fp += nb_found - ctp  # positions incorrectly guessed
             fn += nb_needed - ctp  # sources not found (false negatives)
 
-            # current true positives computed at every threshold for plotting
-            complete_ctp = (dist < thresholds[:, np.newaxis]).sum(axis=-1)
-            global_tp += complete_ctp  # positions correctly guessed
-            global_fp += nb_found - complete_ctp  # positions incorrectly guessed
-            global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
+            if n_plot > 0:
+                # current true positives computed at every threshold for plotting
+                complete_ctp = (dist < thresholds[:, np.newaxis]).sum(axis=-1)
+                global_tp += complete_ctp  # positions correctly guessed
+                global_fp += nb_found - complete_ctp  # positions incorrectly guessed
+                global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
 
-            # mean distance to real sources for the best recovered sources
-            mean_recov_dist = dist[dist < tol].mean()
             entry = dict(exp_id=i, nb_found=nb_found, nb_recov=ctp,
-                         mean_tp_dist=mean_tp_dist, mean_recov_dist=mean_recov_dist,
                          ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
+
+            if distance == 'cartesian':
+                # mean distance to real sources for the best recovered sources
+                entry["mean_recov_dist"] = dist[ind_tol].mean()
+            elif distance == 'spherical:':
+                entry["mean_recov_radial_dist"] = dist_rad[ind_tol].mean()
+                entry["mean_recov_angular_dist"] = dist_circle[ind_tol].mean()
+
             exp_df = exp_df.append(entry, ignore_index=True)
 
         if n_plot > 0:
