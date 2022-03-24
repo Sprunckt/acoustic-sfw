@@ -798,7 +798,10 @@ class TimeDomainSFW(SFW):
         if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
             grid = r * parameter
         else:  # no pre-generated grid
-            dtheta = parameter / np.log(r)
+            if r > 1:  # increase the number of nodes on the grid if the radius exceeds 1
+                dtheta = parameter / np.log(r)
+            else:
+                dtheta = parameter
             grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
         search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
@@ -969,7 +972,10 @@ class FrequencyDomainSFW(SFW):
         if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
             grid = r * parameter
         else:  # no pre-generated grid
-            dtheta = parameter / np.log(r)
+            if r > 1:  # increase the number of nodes on the grid if the radius exceeds 1
+                dtheta = parameter / np.log(r)
+            else:
+                dtheta = parameter
             grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
 
         search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
