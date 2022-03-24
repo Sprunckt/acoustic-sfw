@@ -798,7 +798,7 @@ class TimeDomainSFW(SFW):
         if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
             grid = r * parameter
         else:  # no pre-generated grid
-            if r > 1:  # increase the number of nodes on the grid if the radius exceeds 1
+            if r > np.e:  # increase the number of nodes on the grid if the radius exceeds e
                 dtheta = parameter / np.log(r)
             else:
                 dtheta = parameter
@@ -972,7 +972,7 @@ class FrequencyDomainSFW(SFW):
         if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
             grid = r * parameter
         else:  # no pre-generated grid
-            if r > 1:  # increase the number of nodes on the grid if the radius exceeds 1
+            if r > np.e:  # increase the number of nodes on the grid if the radius exceeds e
                 dtheta = parameter / np.log(r)
             else:
                 dtheta = parameter
