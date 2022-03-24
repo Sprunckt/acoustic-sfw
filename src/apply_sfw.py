@@ -176,8 +176,12 @@ if __name__ == "__main__":
         max_norm = c * N / param_dict["fs"] + 0.5
         rmax = meta_param_dict.get("rmax", max_norm)
 
-        grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
-                                                      meta_param_dict["dphi"], meta_param_dict["dphi"])
+        scale_dphi = meta_param_dict.get("scale_dphi", False)
+        if scale_dphi:
+            grid = meta_param_dict["dphi"]
+        else:
+            grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
+                                                          meta_param_dict["dphi"], meta_param_dict["dphi"])
 
         # file name without extension
         file_ind = os.path.splitext((os.path.split(path)[-1]))[0]

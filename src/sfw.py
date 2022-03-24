@@ -4,7 +4,7 @@ from typing import Union, Tuple
 from scipy.optimize import minimize
 from optimparallel import minimize_parallel
 from sklearn.linear_model import Lasso
-from src.simulation.utils import (disp_measure, c, cut_vec_rir)
+from src.simulation.utils import (disp_measure, c, cut_vec_rir, create_grid_spherical)
 import multiprocessing
 import time
 from abc import ABC, abstractmethod
@@ -142,7 +142,7 @@ class SFW(ABC):
         return tot_merged
 
     @abstractmethod
-    def _grid_initialization_function(self, grid, verbose):
+    def _grid_initialization_function(self, parameters, verbose):
         pass
 
     @abstractmethod
@@ -218,7 +218,11 @@ class SFW(ABC):
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
         Args:
-            -grid (array) : grid used for the initial guess of the new spike
+            -grid (array or float) : parameter used to specify the grid search. It is passed to the grid initialization
+            function. For the time domain case : if spherical_grid == 0, should be the array of the grid.
+        If spherical_grid == 1, if it is an array it is assumed to be a spherical grid of radius 1 that is scaled
+        accordingly during the algorithm. If it is a float, it is assumed to be the angular step for a spherical grid
+        of radius 1, that is scaled depending on the radius r by 1/log(r) to keep a good density of nodes.
             -niter (int) : maximal number of iterations
             -max_ampl (float) : upper bound on spikes amplitudes
             -normalization (int) : the normalization to add to gamma for he spike localization step. 0 means no
@@ -233,7 +237,7 @@ class SFW(ABC):
         initialization (fastest but less precize).
             -spherical_search (int) : if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
-        on the corresponding sphere.
+        on the corresponding sphere. The grid is parametrized by the grid argument.
             - algo_start_cb (dict) : dictionary containing the arguments passed to the algorithm start callback
             it_start_cb (dict) : dictionary containing the arguments passed to the iteration start callback
             -freeze_step (int) : if strictly positive : check each spike every 'freeze_step' iterations. If the spike
@@ -295,7 +299,7 @@ class SFW(ABC):
             if rough_search or search_method == "full":
 
                 if search_method == "rough":  # perform a low precision search
-                    self.opt_options["gtol"] = 1e-2
+                    self.opt_options["gtol"] = np.minimum(1e-1, 1e-6/self.lam)
 
                 # spreading the loop over multiple processors
                 p = multiprocessing.Pool(ncores)
@@ -763,7 +767,7 @@ class TimeDomainSFW(SFW):
 
         int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
         # shape (M, K, N) = gamma_j(x_k)
-        gamma_tens = (self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis])
+        gamma_tens = self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis]
 
         # sum_k ak.gamma_j(x_k) - y_j : sum(M, K, N, axis=1) - y = -residue
         residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - y)
@@ -780,7 +784,7 @@ class TimeDomainSFW(SFW):
                                                    axis=(0, 3)).flatten())
         return jac
 
-    def _grid_initialization_function(self, grid, verbose):
+    def _grid_initialization_function(self, parameter, verbose, **params):
         curr_max, n_max, m_max = -1, 0, 0
         for m in range(self.M):
             ind_tmp, max_tmp = sliding_window_norm(self.res[m*self.N: (m+1)*self.N], 3)
@@ -789,7 +793,13 @@ class TimeDomainSFW(SFW):
                 n_max, m_max = ind_tmp, m
 
         r = n_max * c / self.fs
-        search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
+        if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
+            grid = r * parameter
+        else:  # no pre-generated grid
+            dtheta = parameter / np.log(r)
+            grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
+        print(len(grid))
+        search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
             print("searching around mic {} at a radius {}".format(m_max, r))
         return search_grid
@@ -948,11 +958,19 @@ class FrequencyDomainSFW(SFW):
 
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
-    def _grid_initialization_function(self, grid, verbose):
+    def _grid_initialization_function(self, parameter, verbose):
+        # todo : use a sliding window norm as in time domain case
         # compute the time domain residue
         self.time_sfw.res = self.time_sfw.y - self.time_sfw.gamma(self.ak, self.xk)
         m_max, n_max = flat_to_multi_ind(np.argmax(self.time_sfw.res), self.N)
         r = n_max * c / self.fs
+
+        if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
+            grid = r * parameter
+        else:  # no pre-generated grid
+            dtheta = parameter / np.log(r)
+            grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
+
         search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
             print("searching around mic {} at a radius {}".format(m_max, r))
