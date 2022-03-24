@@ -9,7 +9,9 @@ import multiprocessing
 import time
 from abc import ABC, abstractmethod
 import os
-sfw_tol = 0.05
+
+stop_tol = 1e-6
+deletion_tol = 0.05
 merge_tol = 0.02
 
 ampl_freeze_threshold = 0.05
@@ -352,7 +354,7 @@ class SFW(ABC):
                 print("Optimization converged in {} iterations".format(nit))
                 print("New position : {} \n eta value : {}".format(x_new, etaval))
 
-            if use_hard_stop and etaval <= 1:
+            if use_hard_stop and etaval <= 1 + stop_tol:
                 if verbose:
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
                 if self._on_stop():
@@ -447,7 +449,7 @@ class SFW(ABC):
                             print("Energy increased, sliding not applied - retrying next iteration")
 
             # deleting null amplitude spikes
-            ind_null = np.asarray(np.abs(self.ak) < sfw_tol)
+            ind_null = np.asarray(np.abs(self.ak) < deletion_tol)
             self.ak = self.ak[~ind_null]
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
@@ -798,10 +800,9 @@ class TimeDomainSFW(SFW):
         else:  # no pre-generated grid
             dtheta = parameter / np.log(r)
             grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
-        print(len(grid))
         search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
-            print("searching around mic {} at a radius {}".format(m_max, r))
+            print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
         return search_grid
 
     def _get_normalized_fun(self, normalization):
