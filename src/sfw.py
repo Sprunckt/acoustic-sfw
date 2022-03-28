@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Union, Tuple
+import pandas as pd
 from scipy.optimize import minimize
 from optimparallel import minimize_parallel
 from sklearn.linear_model import Lasso
@@ -69,6 +70,12 @@ class SFW(ABC):
         self.freeze_step = 0
         self.y_freeze = self.y
 
+        # manage saves
+        self.save, self.save_path = False, None
+
+        self.saving_freq = 0
+        self.save_list = []
+
     @abstractmethod
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         """
@@ -114,6 +121,9 @@ class SFW(ABC):
     def _stop(self, verbose=True):
         if verbose:
             print("total exec time : {} s".format(time.time() - self.timer))
+        if self.save:
+            df = pd.DataFrame(self.save_list, columns=["iter", "t", "ak", "xk"])
+            df.to_csv(self.save_path, index=False)
         return self.ak, self.xk
 
     def merge_spikes(self):
@@ -211,47 +221,67 @@ class SFW(ABC):
         False if it is allowed to go on through (for example if the RIR is not extended to its full length)."""
         return True
 
+    def _it_end_cb(self):
+        # update the residue
+        self.compute_residue()
+
+        if self.save and self.it % self.saving_freq == 0:
+            self.save_list.append([self.it, time.time() - self.timer,
+                                   self.ak.copy(), self.xk.copy()])
+
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
-                    freeze_step=0, resliding_step=0) -> (np.ndarray, np.ndarray):
+                    freeze_step=0, resliding_step=0, saving_param=None) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
         Args:
-            -grid (array or float) : parameter used to specify the grid search. It is passed to the grid initialization
+            -grid (array or float): parameter used to specify the grid search. It is passed to the grid initialization
             function. For the time domain case : if spherical_grid == 0, should be the array of the grid.
         If spherical_grid == 1, if it is an array it is assumed to be a spherical grid of radius 1 that is scaled
         accordingly during the algorithm. If it is a float, it is assumed to be the angular step for a spherical grid
         of radius 1, that is scaled depending on the radius r by 1/log(r) to keep a good density of nodes.
-            -niter (int) : maximal number of iterations
-            -max_ampl (float) : upper bound on spikes amplitudes
-            -normalization (int) : the normalization to add to gamma for he spike localization step. 0 means no
+            -niter (int): maximal number of iterations
+            -max_ampl (float): upper bound on spikes amplitudes
+            -normalization (int): the normalization to add to gamma for he spike localization step. 0 means no
         normalization, 1 adds a factor 1/(sqrt(sum(1/dist(x, xm)**2))
-            -min_norm (float) : minimal norm allowed for the position found at the end of the grid search
-            -max_norm (float) : used as bounds for the coordinates of the spike locations in each direction
-            -use_hard_stop (bool) : if True, add max|etak| <= 1 as a stopping condition
-            -early_stopping (bool) : if True, stop at the end of an iteration if the last spike found has zero amplitude
-            -search_method (str) : grid search methods for the spike position search. If "rough" : perform a coarse
+            -min_norm (float): minimal norm allowed for the position found at the end of the grid search
+            -max_norm (float): used as bounds for the coordinates of the spike locations in each direction
+            -use_hard_stop (bool): if True, add max|etak| <= 1 as a stopping condition
+            -early_stopping (bool): if True, stop at the end of an iteration if the last spike found has zero amplitude
+            -search_method (str): grid search methods for the spike position search. If "rough" : perform a coarse
         optimization on each point of the grid before refining on the best position. If "full" : perform a fine
         optimization on each grid point (costly). If "naive" : find the best value on the grid and use it as
         initialization (fastest but less precize).
-            -spherical_search (int) : if equal to 1 : assume that the given grid is spherical. The maximum energy spike
+            -spherical_search (int): if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
         on the corresponding sphere. The grid is parametrized by the grid argument.
-            - algo_start_cb (dict) : dictionary containing the arguments passed to the algorithm start callback
-            it_start_cb (dict) : dictionary containing the arguments passed to the iteration start callback
-            -freeze_step (int) : if strictly positive : check each spike every 'freeze_step' iterations. If the spike
+            - algo_start_cb (dict): dictionary containing the arguments passed to the algorithm start callback
+            it_start_cb (dict): dictionary containing the arguments passed to the iteration start callback
+            -freeze_step (int): if strictly positive : check each spike every 'freeze_step' iterations. If the spike
         has not moved sufficiently since the last check, the spike is frozen and is not allowed to slide in the next
         iterations. Speeds up the execution when the number of iterations becomes important, but lessens the accuracy.
-            -resliding_step (int) : if strictly positive : apply a periodic sliding step on all the spikes (including
+            -resliding_step (int): if strictly positive : apply a periodic sliding step on all the spikes (including
         the frozen ones).
+            -saving_param (tuple): if not None, should have the signature (int, str). Save the measure every
+        saving_param[0] iteration to a csv file containing : iter (iteration number), t (execution time at the end of
+        the iteration), ak (array of amplitudes), xk (array of locations). The file is saved to the saving_param[1]
+        path.
          Return:
             (ak, xk) where :
             -ak is a flat array of shape (K,) containing the amplitudes of the recovered measure
             -xk is a (K, d) shaped array containing the locations of the K spikes composing the measure
         """
+        if saving_param is not None:
+            self.saving_freq = saving_param[0]
+            self.save_path = saving_param[1]
+            self.save = True
+            if not os.path.exists(os.path.dirname(self.save_path)):
+                print("{} does not exists".format(self.save_path))
+                exit(1)
+
         self.timer = time.time()
         self.eta, self.eta_jac, slide_jac = self._get_normalized_fun(normalization)
 
@@ -282,7 +312,7 @@ class SFW(ABC):
         for i in range(niter):
             self.it += 1
             if verbose:
-                print("iteration {}, residual norm : {}".format(self.it, self.res_norm))
+                print("iteration {}, residual norm : {}".format(i+1, self.res_norm))
 
             self._iteration_start_callback(**it_start_cb)
             # find argmax etak to get the new spike position (step 3)
@@ -321,6 +351,7 @@ class SFW(ABC):
                     if self._on_stop():
                         return self._stop(verbose=verbose)
                     else:
+                        self._it_end_cb()
                         continue
 
                 if rough_search:  # perform a finer optimization using the position found as initialization
@@ -360,6 +391,7 @@ class SFW(ABC):
                 if self._on_stop():
                     return self._stop(verbose=verbose)
                 else:
+                    self._it_end_cb()
                     continue
 
             # solve LASSO to adjust the amplitudes according to the new spike (step 7)
@@ -468,6 +500,7 @@ class SFW(ABC):
                     print("Error : all spikes are null, stopping")
                     return self._stop(verbose=verbose)
                 else:
+                    self._it_end_cb()
                     continue
             # last spike is null and minor changes from the previous iteration at the sliding step
             elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
@@ -476,6 +509,7 @@ class SFW(ABC):
                     print("Last spike has null amplitude, stopping")
                     return self._stop(verbose=verbose)
                 else:
+                    self._it_end_cb()
                     continue
 
             if spike_merging:
@@ -491,8 +525,8 @@ class SFW(ABC):
                 print("New measure :")
                 disp_measure(self.ak, self.xk)
 
-            # update the residue
-            self.compute_residue()
+            # save if necessary and update residue
+            self._it_end_cb()
 
             if plot:
                 gk = self.gamma(self.ak, self.xk)  # current rir
