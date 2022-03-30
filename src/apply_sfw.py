@@ -173,7 +173,7 @@ if __name__ == "__main__":
                 s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
 
         # maximum reachable distance
-        max_norm = c * N / param_dict["fs"] + 0.5
+        max_norm = c * N / meta_param_dict["fs"] + 0.5
         rmax = meta_param_dict.get("rmax", max_norm)
 
         scale_dphi = meta_param_dict.get("scale_dphi", False)
@@ -238,12 +238,20 @@ if __name__ == "__main__":
         inv_rot_walls = rot_walls.inv()
         s.mic_pos = mic_pos @ rot_walls.as_matrix()
 
+        save_var = meta_param_dict.get("save_path")
+        if save_var is not None:
+            save_freq = meta_param_dict.get("save_freq")
+            if save_freq is None:
+                save_freq = 8
+            save_var = (save_freq, save_var + "{}.csv".format(exp_ind))
+
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              freeze_step=freeze_step, resliding_step=resliding_step,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
-                             use_hard_stop=True, verbose=True, search_method="rough", early_stopping=True, plot=False)
+                             use_hard_stop=True, verbose=True, search_method="rough", early_stopping=True, plot=False,
+                             saving_param=save_var)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
