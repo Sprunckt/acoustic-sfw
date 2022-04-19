@@ -68,6 +68,8 @@ if __name__ == "__main__":
     algo_start_cb = meta_param_dict.get("start_cb")
     freeze_step = meta_param_dict.get("freeze_step", 0)
     resliding_step = meta_param_dict.get("resliding_step", 0)
+    slide_once = meta_param_dict.get("slide_once", False)
+
     # choose to cut the rir
     cutoff = meta_param_dict.get("cutoff", -1)
 
@@ -251,7 +253,7 @@ if __name__ == "__main__":
                              freeze_step=freeze_step, resliding_step=resliding_step,
                              normalization=normalization, spike_merging=False, spherical_search=spherical_search,
                              use_hard_stop=True, verbose=True, search_method="rough", early_stopping=True, plot=False,
-                             saving_param=save_var)
+                             saving_param=save_var, slide_once=slide_once)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()

@@ -58,9 +58,12 @@ class SFW(ABC):
         self.nk = 0
         self.it = 0
 
+        # used to put boundaries on positions and amplitudes
+        self.max_norm, self.max_ampl = 0., 0.
+
         self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
                             'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
-        self.eta, self.eta_jac = None, None
+        self.eta, self.eta_jac, self.slide_jac = None, None, None
         self.timer = None
 
         # spike history for freezing spikes
@@ -68,13 +71,15 @@ class SFW(ABC):
         self.spike_hist_counter = np.zeros(0, dtype=int)
         self.active_spikes, self.n_active = np.zeros(0, dtype=bool), 0
         self.freeze_step = 0
+        self.single_slide = False
         self.y_freeze = self.y
 
         # manage saves
         self.save, self.save_path = False, None
-
         self.saving_freq = 0
         self.save_list = []
+
+        self.ncores = len(os.sched_getaffinity(0))
 
     @abstractmethod
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -108,6 +113,36 @@ class SFW(ABC):
 
         return 0.5 * np.sum((self.gamma(a, self.xkp) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
+    def _slide_step(self, ini, verbose=False):
+        tstart = time.time()
+
+        # determining if it is a partial or full sliding step
+        n_bounds = len(ini) // (self.d + 1)
+
+        if n_bounds == self.n_active:
+            args = (self.y_freeze, self.n_active)
+        elif n_bounds == self.nk:
+            args = (self.y, self.nk)
+        else:
+            args = None
+            print("invalid bounds vector length for LBFGS-B")
+            exit(1)
+
+        # bounds for the amplitudes and positions
+        bounds = [(0., self.max_ampl)] * n_bounds + [(-self.max_norm, self.max_norm)] * n_bounds * self.d
+
+        opti_res = minimize_parallel(self._obj_slide, ini, jac=self.slide_jac, bounds=bounds,
+                                     args=args, parallel={'max_workers': self.ncores})
+        mk, nit_slide, val_fin, tend = opti_res.x, opti_res.nit, opti_res.fun, time.time()
+        if verbose:
+            print("Initial/final values : {} {} \n".format(self._obj_slide(ini, y=args[0], n_spikes=args[1]), val_fin))
+            print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
+                                                                                     tend - tstart))
+            if not opti_res.success:
+                print("Last optimization failed, reason : {}".format(opti_res.message))
+
+        return mk, nit_slide, val_fin, opti_res
+
     def _obj_slide(self, var, y, n_spikes):
         """
         Objective function for the sliding step (optimization on locations and amplitude).
@@ -119,11 +154,26 @@ class SFW(ABC):
         return minimize(self.eta, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
 
     def _stop(self, verbose=True):
-        if verbose:
-            print("total exec time : {} s".format(time.time() - self.timer))
+        if self.single_slide:  # sliding once before the end
+            print("Last sliding step before stopping")
+            ini = np.concatenate([self.ak, self.xk.flatten()])
+            ini_val = self._obj_slide(ini, y=self.y, n_spikes=self.nk)
+            mk, nit_slide, val_fin, opti_res = self._slide_step(ini, verbose=verbose)
+            if val_fin < ini_val:
+                self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
+                if self.save:
+                    self.save_list.append([self.it+1, time.time() - self.timer, self.ak, self.xk])
+            else:
+                if verbose:
+                    print("Energy increased, ignoring the sliding step")
+
         if self.save:
             df = pd.DataFrame(self.save_list, columns=["iter", "t", "ak", "xk"])
             df.to_csv(self.save_path, index=False)
+
+        if verbose:
+            print("total exec time : {} s".format(time.time() - self.timer))
+
         return self.ak, self.xk
 
     def merge_spikes(self):
@@ -233,7 +283,7 @@ class SFW(ABC):
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
-                    freeze_step=0, resliding_step=0, saving_param=None) -> (np.ndarray, np.ndarray):
+                    freeze_step=0, resliding_step=0, saving_param=None, slide_once=False) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -265,6 +315,8 @@ class SFW(ABC):
         iterations. Speeds up the execution when the number of iterations becomes important, but lessens the accuracy.
             -resliding_step (int): if strictly positive : apply a periodic sliding step on all the spikes (including
         the frozen ones).
+            -slide_once (bool): if True : overwrite freeze_step and resliding_step and apply a single sliding step
+        on all spikes just before stopping the algorithm.
             -saving_param (tuple): if not None, should have the signature (int, str). Save the measure every
         saving_param[0] iteration to a csv file containing : iter (iteration number), t (execution time at the end of
         the iteration), ak (array of amplitudes), xk (array of locations). The file is saved to the saving_param[1]
@@ -283,16 +335,23 @@ class SFW(ABC):
                 exit(1)
 
         self.timer = time.time()
-        self.eta, self.eta_jac, slide_jac = self._get_normalized_fun(normalization)
+        self.eta, self.eta_jac, self.slide_jac = self._get_normalized_fun(normalization)
 
-        xmin, xmax = -max_norm, max_norm
-        amin, amax = 0, max_ampl
+        self.max_norm = max_norm
+        self.max_ampl = max_ampl
+
         self.nk = 0
-        self.freeze_step = freeze_step
 
-        ncores = len(os.sched_getaffinity(0))
+        if slide_once:
+            self.single_slide = True
+            self.freeze_step, resliding_step = 0, 0
+        else:
+            self.freeze_step = freeze_step
+            assert freeze_step >= 0, "freeze_step should be 0 or strictly positive"
+            assert resliding_step >= 0, "resliding_step should be 0 or strictly positive"
+
         if verbose:
-            print("Executing on {} cores".format(ncores))
+            print("Executing on {} cores".format(self.ncores))
             
         reslide_counter = 0
 
@@ -334,7 +393,7 @@ class SFW(ABC):
                     self.opt_options["gtol"] = np.minimum(1e-1, 1e-6/self.lam)
 
                 # spreading the loop over multiple processors
-                p = multiprocessing.Pool(ncores)
+                p = multiprocessing.Pool(self.ncores)
                 gr_opt = p.map(self._optigrid, search_grid)
                 p.close()
 
@@ -413,65 +472,43 @@ class SFW(ABC):
                                                                                time.time() - tstart))
                 print("New amplitudes : {} \n".format(ak_new))
 
-            # sliding step : optimize to adjust both the positions and amplitudes
-
-            # bounds for the amplitudes and positions
-            bounds = [(amin, amax)] * self.n_active + [(xmin, xmax)] * self.n_active * self.d
-
-            tmp_active = np.append(self.active_spikes, [True])
-            ini = np.concatenate([ak_new[tmp_active],
-                                  self.xkp[tmp_active].flatten()])
-
-            ini_val = self._obj_slide(ini, y=self.y_freeze, n_spikes=self.n_active)
-
-            if verbose:
-                print("Sliding step --------")
-                print("initial value : {}".format(ini_val))
-
-            tstart = time.time()
-
-            opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac, bounds=bounds,
-                                         args=(self.y_freeze, self.n_active), parallel={'max_workers': ncores})
-            mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
-            decreased_energy = val_fin < ini_val
-
-            # use the new measure if the sliding step decreased the energy, else keep the old values
-            if decreased_energy:
-                ak_new[tmp_active], self.xkp[tmp_active] = mk[:self.n_active], mk[self.n_active:].reshape([-1, self.d])
-            else:
+            if slide_once:
+                nit_slide, decreased_energy = 0, False
                 if verbose:
-                    print("Energy increased, ignoring this step")
+                    print("Skipping the sliding step")
+            else:
+                # sliding step : optimize to adjust both the positions and amplitudes
+                tmp_active = np.append(self.active_spikes, [True])
+                ini = np.concatenate([ak_new[tmp_active],
+                                      self.xkp[tmp_active].flatten()])
+
+                ini_val = self._obj_slide(ini, y=self.y_freeze, n_spikes=self.n_active)
+
+                if verbose:
+                    print("Sliding step --------")
+
+                mk, nit_slide, val_fin, opti_res = self._slide_step(ini, verbose=verbose)
+
+                decreased_energy = val_fin < ini_val
+
+                # use the new measure if the sliding step decreased the energy, else keep the old values
+                if decreased_energy:
+                    ak_new[tmp_active] = mk[:self.n_active]
+                    self.xkp[tmp_active] = mk[self.n_active:].reshape([-1, self.d])
+                else:
+                    if verbose:
+                        print("Energy increased, ignoring this step")
 
             self.ak, self.xk = ak_new, self.xkp
-
-            if not opti_res.success:
-                print("Last optimization failed, reason : {}".format(opti_res.message))
-
-            if verbose:
-                print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
-                                                                                         time.time() - tstart))
-                print("Objective value : {}".format(val_fin))
 
             if resliding_step:
                 reslide_counter += 1
                 if reslide_counter >= resliding_step:
-                    bounds = [(amin, amax)] * self.nk + [(xmin, xmax)] * self.nk * self.d
                     ini = np.concatenate([self.ak, self.xk.flatten()])
                     ini_val = self._obj_slide(ini, y=self.y, n_spikes=self.nk)
                     if verbose:
                         print("Periodic sliding step on every spike ---")
-                    tstart = time.time()
-                    opti_res = minimize_parallel(self._obj_slide, ini, jac=slide_jac,
-                                                 bounds=bounds, args=(self.y, self.nk))
-                    mk, nit_slide, val_fin = opti_res.x, opti_res.nit, opti_res.fun
-                    tend = time.time()
-                    if verbose:
-                        print("Initial/final values : {} {} \n".format(ini_val, val_fin))
-                        print("Optimization converged in {} iterations, exec time : {} s".format(nit_slide,
-                                                                                                 tend - tstart))
-
-                    if not opti_res.success:
-                        print("Last optimization failed, reason : {}".format(opti_res.message))
+                    mk, nit_slide, val_fin, opti_res = self._slide_step(ini, verbose=verbose)
 
                     if val_fin < ini_val:  # check if the energy has decreased
                         self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
@@ -486,7 +523,7 @@ class SFW(ABC):
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
 
-            if freeze_step and self.nk > 0:  # update the frozen spikes history
+            if self.freeze_step and self.nk > 0:  # update the frozen spikes history
                 self._append_history(self.ak[self.nk-1:], self.xk[self.nk-1].reshape(1, 3))
                 self._update_history(ind_null)  # if the new spike is null it is instantly deleted. todo: clean this
                 if verbose:
