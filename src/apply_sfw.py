@@ -202,10 +202,10 @@ if __name__ == "__main__":
         spherical_search = meta_param_dict.get("spherical_search", 0)
         stdout = sys.stdout
 
-        added_noise = np.zeros_like(s.y)
+        added_noise = np.zeros_like(measurements)
         if psnr is not None:  # add noise (unsupported for frequential domain)
-            std = np.max(np.abs(s.y))*10**(-psnr/20)
-            added_noise = added_noise + rand_gen.normal(0, std, s.y.shape)
+            std = np.max(np.abs(measurements))*10**(-psnr/20)
+            added_noise = added_noise + rand_gen.normal(0, std, measurements.shape)
 
         if psnr_corr is not None:  # add a sound source emitting blank noise somewhere in the room
             noise_pos = param_dict.get("noise_pos")
@@ -228,9 +228,8 @@ if __name__ == "__main__":
             added_noise = added_noise + w
 
         if psnr_corr is not None or psnr is not None:  # if there is noise : update the signal
-            new_y = s.y + added_noise
-            measurements = new_y.copy()  # update the measurements to save the target RIR
-            s.__init__(y=new_y, **sfw_init_args)
+            measurements = measurements + added_noise  # update the measurements to save the target RIR
+            s.__init__(y=measurements, **sfw_init_args)
 
         # apply a transformation to the room coordinates (done after creating the observations)
         rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
@@ -261,8 +260,9 @@ if __name__ == "__main__":
 
         if domain != "frequential":  # extend the RIR to the maximum length
             s.NN = compute_time_sample(s.global_N, s.fs)
-
-        reconstr_rir = s.gamma(a, x)
+            reconstr_rir = s.gamma(a, x)
+        else:
+            reconstr_rir = s.time_sfw.gamma(a, x)
 
         ind, dist = compare_arrays(x, src)
         print("source matching and distances : \n", ind)
@@ -278,9 +278,6 @@ if __name__ == "__main__":
         # save the position of the microphones
         dist_dic["mic_array"] = s.mic_pos
 
-        if domain == "frequential":
-            measurements = [np.real(measurements).tolist(), np.imag(measurements).tolist()]
-            reconstr_rir = [np.real(reconstr_rir).tolist(), np.imag(reconstr_rir).tolist()]
         save_results(res_path, rir_path, image_pos=src, ampl=ampl, orders=orders, reconstr_pos=x, reconstr_ampl=a,
                      rir=measurements, reconstr_rir=reconstr_rir, N=N, **dist_dic)
 
