@@ -34,17 +34,17 @@ def sliding_window_norm(a, win_length):
     """
     Compute the maximum of a sliding mean on the energy.
     """
-    energy = a**2
+    energy = np.abs(a)**2
     sliding_mean = np.convolve(energy, np.full(win_length, 1./win_length), 'same')
     ind = np.argmax(sliding_mean)
     return ind, sliding_mean[ind]
 
 
 class SFW(ABC):
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float, lam: float = 1e-2):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float, lam: float = 1e-2, N=0):
         self.fs, self.lam = fs, lam
         self.d = 3
-
+        self.N = N
         if type(y) == np.ndarray:
             self.y = y
         else:
@@ -113,6 +113,10 @@ class SFW(ABC):
 
         return 0.5 * np.sum((self.gamma(a, self.xkp) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
+    def _minimize_lbfgsb_wrapper(self, ini, bounds, args):
+        return minimize_parallel(self._obj_slide, ini, jac=self.slide_jac, bounds=bounds,
+                                 args=args, parallel={'max_workers': self.ncores})
+
     def _slide_step(self, ini, verbose=False):
         tstart = time.time()
 
@@ -131,8 +135,7 @@ class SFW(ABC):
         # bounds for the amplitudes and positions
         bounds = [(0., self.max_ampl)] * n_bounds + [(-self.max_norm, self.max_norm)] * n_bounds * self.d
 
-        opti_res = minimize_parallel(self._obj_slide, ini, jac=self.slide_jac, bounds=bounds,
-                                     args=args, parallel={'max_workers': self.ncores})
+        opti_res = self._minimize_lbfgsb_wrapper(ini, bounds, args)
         mk, nit_slide, val_fin, tend = opti_res.x, opti_res.nit, opti_res.fun, time.time()
         if verbose:
             print("Initial/final values : {} {} \n".format(self._obj_slide(ini, y=args[0], n_spikes=args[1]), val_fin))
@@ -601,17 +604,16 @@ class TimeDomainSFW(SFW):
         # number of time samples of the full RIR
         self.global_N = N
         # number of time samples used in practice (might change during execution)
-        self.N = N
-        self.NN = compute_time_sample(self.N, fs)  # discretized time interval
+        self.NN = compute_time_sample(N, fs)  # discretized time interval
 
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
         self.d = mic_pos.shape[1]
         assert 1 < self.d < 4, "Invalid dimension d"
 
-        self.J = self.M * self.N
+        self.J = self.M * N
 
-        super().__init__(y=y, fs=fs, lam=lam)  # getting attributes and methods from parent class
+        super().__init__(y=y, fs=fs, lam=lam, N=N)  # getting attributes and methods from parent class
         # full rir
         self.global_y = self.y
 
@@ -966,15 +968,15 @@ class FrequencyDomainSFW(SFW):
         # array of observed frequencies
         self.freq_array = np.fft.rfftfreq(N, d=1. / fs) * 2 * np.pi
 
-        self.N, self.N_freq = N, len(self.freq_array)
+        self.N_freq = len(self.freq_array)
 
         self.J = self.M * self.N_freq
 
         # compute the FFT of the rir, divide by the normalization constant
-        y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.N),
+        y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, N),
                              axis=-1).flatten() / np.sqrt(2 * np.pi)
 
-        super().__init__(y=y_freq, fs=fs, lam=lam)  # getting attributes and methods from parent class
+        super().__init__(y=y_freq, fs=fs, lam=lam, N=N)  # getting attributes and methods from parent class
 
     def sinc_hat(self, w):
         return 1. * (np.abs(w) <= self.fs * np.pi)  # no 1/fs factor to account for FT approximation with DFT
@@ -1012,6 +1014,13 @@ class FrequencyDomainSFW(SFW):
 
         return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
 
+    def compute_residue(self):
+        gk = self.gamma(self.ak, self.xk)
+        self.res = self.y - gk
+        self.res_norm = np.mean(np.linalg.norm(self.res.reshape(self.M, self.N_freq), axis=1), axis=0)  # mean residual norm
+
+        return self.res
+
     def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
@@ -1034,12 +1043,16 @@ class FrequencyDomainSFW(SFW):
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
     def _grid_initialization_function(self, parameter, verbose):
-        # todo : use a sliding window norm as in time domain case
         # compute the time domain residue
         self.time_sfw.res = self.time_sfw.y - self.time_sfw.gamma(self.ak, self.xk)
-        m_max, n_max = flat_to_multi_ind(np.argmax(self.time_sfw.res), self.N)
-        r = n_max * c / self.fs
+        curr_max, n_max, m_max = -1, 0, 0
+        for m in range(self.M):
+            ind_tmp, max_tmp = sliding_window_norm(self.time_sfw.res[m * self.N: (m + 1) * self.N], 3)
+            if max_tmp > curr_max:
+                curr_max = max_tmp
+                n_max, m_max = ind_tmp, m
 
+        r = n_max * c / self.fs
         if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
             grid = r * parameter
         else:  # no pre-generated grid
@@ -1048,10 +1061,9 @@ class FrequencyDomainSFW(SFW):
             else:
                 dtheta = parameter
             grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
-
-        search_grid = r * grid + self.mic_pos[m_max][np.newaxis, :]
+        search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
         if verbose:
-            print("searching around mic {} at a radius {}".format(m_max, r))
+            print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
         return search_grid
 
     def _get_normalized_fun(self, normalization):
@@ -1060,10 +1072,13 @@ class FrequencyDomainSFW(SFW):
         slide_jac = "3-point"
         return normalized_eta, normalized_eta_jac, slide_jac
 
+    def _minimize_lbfgsb_wrapper(self, ini, bounds, args):
+        return minimize(self._obj_slide, ini, jac=self.slide_jac, method="L-BFGS-B", bounds=bounds, args=args)
+
     def _obj_slide(self, var, y, n_spikes):
         """
         Objective function for the sliding step, adapted for complex values
         """
 
-        a, x = var[:self.nk], var[self.nk:].reshape(-1, self.d)
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
         return 0.5 * np.sum(np.abs(self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
