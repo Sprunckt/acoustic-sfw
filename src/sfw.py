@@ -113,10 +113,6 @@ class SFW(ABC):
 
         return 0.5 * np.sum((self.gamma(a, self.xkp) - self.y) ** 2) + self.lam * np.sum(np.abs(a))
 
-    def _minimize_lbfgsb_wrapper(self, ini, bounds, args):
-        return minimize_parallel(self._obj_slide, ini, jac=self.slide_jac, bounds=bounds,
-                                 args=args, parallel={'max_workers': self.ncores})
-
     def _slide_step(self, ini, verbose=False):
         tstart = time.time()
 
@@ -135,7 +131,8 @@ class SFW(ABC):
         # bounds for the amplitudes and positions
         bounds = [(0., self.max_ampl)] * n_bounds + [(-self.max_norm, self.max_norm)] * n_bounds * self.d
 
-        opti_res = self._minimize_lbfgsb_wrapper(ini, bounds, args)
+        opti_res = minimize_parallel(self._obj_slide, ini, jac=self.slide_jac, bounds=bounds,
+                                     args=args, parallel={'max_workers': self.ncores})
         mk, nit_slide, val_fin, tend = opti_res.x, opti_res.nit, opti_res.fun, time.time()
         if verbose:
             print("Initial/final values : {} {} \n".format(self._obj_slide(ini, y=args[0], n_spikes=args[1]), val_fin))
@@ -1036,7 +1033,7 @@ class FrequencyDomainSFW(SFW):
                                     np.imag(gamma_mat_cpx)], axis=0)
         lasso_fitter = Lasso(alpha=self.lam, positive=True)
         target = np.concatenate([np.real(self.y), np.imag(self.y)]).reshape(-1, 1)
-        scale = np.sqrt(2 * len(gamma_mat))  # rescaling factor for sklearn convention
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * target)
 
@@ -1069,11 +1066,8 @@ class FrequencyDomainSFW(SFW):
     def _get_normalized_fun(self, normalization):
         normalized_eta = [self.etak, self.etak_norm1][normalization]
         normalized_eta_jac = "3-point"
-        slide_jac = "3-point"
+        slide_jac = None
         return normalized_eta, normalized_eta_jac, slide_jac
-
-    def _minimize_lbfgsb_wrapper(self, ini, bounds, args):
-        return minimize(self._obj_slide, ini, jac=self.slide_jac, method="L-BFGS-B", bounds=bounds, args=args)
 
     def _obj_slide(self, var, y, n_spikes):
         """
