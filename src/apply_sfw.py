@@ -4,7 +4,7 @@ from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
                                   json_to_dict, correlation, unique_matches)
-from src.visualization import plot_room
+from src.tools.visualization import plot_room
 from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
 import getopt

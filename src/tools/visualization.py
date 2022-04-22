@@ -52,29 +52,34 @@ def plot_3d_planes(fun, slices, other_bounds, N, axis=0):
     print("Maximum on each slice : {} \n Minimum on each slice : {}".format(m, mm))
 
 
-def plot_3d_sphere(fun, radius, dtheta, dphi):
+def plot_3d_sphere(fun, radius, dtheta, dphi, ax=None, show=True, broadcast=True):
     """
     Plot the function fun on 3d spheres indicated by the list of radiuses "radius".
     dtheta, dphi give the angular discretizations for each sphere.
     """
 
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+
     for i in range(len(radius)):
         r = radius[i]
         grid, _, _ = create_grid_spherical(r, r, 1, dtheta, dphi)
-        res = np.apply_along_axis(fun, 1, grid)
-
-        fig = plt.figure()
-        ax = fig.add_subplot(projection='3d')
+        if broadcast:
+            res = fun(grid)
+        else:
+            res = np.apply_along_axis(fun, 1, grid)
         sc = ax.scatter(grid[:, 0], grid[:, 1], grid[:, 2], marker='o', c=res)
         plt.title('r = {} '.format(r))
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('z')
         plt.colorbar(sc)
-        plt.show()
+        if show:
+            plt.show()
 
 
-def plot_room(mic, src, ampl, reconstr_src, orders=None):
+def plot_room(mic, src, ampl, reconstr_src, orders=None, show=True, legend=True):
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
 
@@ -102,11 +107,17 @@ def plot_room(mic, src, ampl, reconstr_src, orders=None):
 
     ax.scatter(mic[:, 0], mic[:, 1], mic[:, 2], label='microphones', marker='+')
     ax.scatter(reconstr_src[:, 0], reconstr_src[:, 1], reconstr_src[:, 2], label='reconstructed sources',
-               marker='o',  s=50, alpha=0.3, edgecolor='k', color='red')
+               marker='o',  s=50, alpha=0.45, edgecolor='k', color='red')
     ax.scatter(src[sec_src_ind, 0], src[sec_src_ind, 1], src[sec_src_ind, 2], label='image sources',
                marker='D', alpha=1, s=5, c=colors_true)
-    plt.legend()
-    plt.show()
+
+    # change the aspect ratio to get orthonormal
+    ax.set_box_aspect((np.ptp(src[:, 0]), np.ptp(src[:, 1]), np.ptp(src[:, 2])))
+    if legend:
+        plt.legend(framealpha=0.95, fontsize=15)
+    if show:
+        plt.show()
+    return ax
 
 
 def save_rir(rir_vec: np.ndarray, N: int, fs: float, directory: str, name1="RIR", rir_vec2=None, name2="RIR2"):
