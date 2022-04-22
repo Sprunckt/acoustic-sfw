@@ -407,7 +407,7 @@ class SFW(ABC):
                 if curr_opti_res is None:  # it means the spikes found are all inside the ball of radius min_norm
                     if verbose:
                         print("Cannot find a spike outside the minimal norm ball")
-                    if self._on_stop():
+                    if self._on_stop(verbose=verbose):
                         return self._stop(verbose=verbose)
                     else:
                         self._it_end_cb()
@@ -533,7 +533,7 @@ class SFW(ABC):
                 self.n_active = self.nk
 
             if self.nk == 0:
-                if self._on_stop():
+                if self._on_stop(verbose=verbose):
                     print("Error : all spikes are null, stopping")
                     return self._stop(verbose=verbose)
                 else:
@@ -542,7 +542,7 @@ class SFW(ABC):
             # last spike is null and minor changes from the previous iteration at the sliding step
             elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
                   and (nit_slide == 1 or not decreased_energy)):
-                if self._on_stop():
+                if self._on_stop(verbose=verbose):
                     print("Last spike has null amplitude, stopping")
                     return self._stop(verbose=verbose)
                 else:
@@ -730,7 +730,6 @@ class TimeDomainSFW(SFW):
         """
         The filter applied for each measurement.
         """
-
         return np.sinc(t * self.fs)
 
     def sinc_der(self, t):
