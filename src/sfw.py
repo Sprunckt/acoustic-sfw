@@ -362,7 +362,7 @@ class SFW(ABC):
                 self.slide_control = 2
             else:
                 print("method '{}' not recognized".format(slide_method))
-        print("freeze:", self.freeze_step, "reslide:", resliding_step)
+
         if verbose:
             print("Executing on {} cores".format(self.ncores))
             
