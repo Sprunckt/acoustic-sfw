@@ -71,7 +71,7 @@ class SFW(ABC):
         self.spike_hist_counter = np.zeros(0, dtype=int)
         self.active_spikes, self.n_active = np.zeros(0, dtype=bool), 0
         self.freeze_step = 0
-        self.single_slide = False
+        self.slide_control = 0  # control over the sliding step : 0 -> every iteration, 1 -> only at the end, 2 -> none
         self.y_freeze = self.y
 
         # manage saves
@@ -154,7 +154,7 @@ class SFW(ABC):
         return minimize(self.eta, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
 
     def _stop(self, verbose=True):
-        if self.single_slide:  # sliding once before the end
+        if self.slide_control == 1:  # sliding once before the end
             print("Last sliding step before stopping")
             ini = np.concatenate([self.ak, self.xk.flatten()])
             ini_val = self._obj_slide(ini, y=self.y, n_spikes=self.nk)
@@ -283,7 +283,7 @@ class SFW(ABC):
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
-                    freeze_step=0, resliding_step=0, saving_param=None, slide_once=False) -> (np.ndarray, np.ndarray):
+                    slide_opt=None, saving_param=None) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -308,15 +308,17 @@ class SFW(ABC):
             -spherical_search (int): if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
         on the corresponding sphere. The grid is parametrized by the grid argument.
-            - algo_start_cb (dict): dictionary containing the arguments passed to the algorithm start callback
+            -algo_start_cb (dict): dictionary containing the arguments passed to the algorithm start callback
             it_start_cb (dict): dictionary containing the arguments passed to the iteration start callback
-            -freeze_step (int): if strictly positive : check each spike every 'freeze_step' iterations. If the spike
-        has not moved sufficiently since the last check, the spike is frozen and is not allowed to slide in the next
-        iterations. Speeds up the execution when the number of iterations becomes important, but lessens the accuracy.
-            -resliding_step (int): if strictly positive : apply a periodic sliding step on all the spikes (including
-        the frozen ones).
-            -slide_once (bool): if True : overwrite freeze_step and resliding_step and apply a single sliding step
-        on all spikes just before stopping the algorithm.
+            -slide_opt (dict) : dictionary containing the options for the sliding step. If None : perform a full sliding
+        at each step. Else : should contain a key "method", the associated value being in ["slide_once", "no_slide",
+        "freeze"]. Behavior : * "slide_once" : skip the sliding step and perform a single sliding at the end
+                * "no_slide" : completely skip the sliding step
+                * "freeze" : the additional key "freeze_step" should be added. Check each spike every
+        "freeze_step" iterations. If the spike has not moved sufficiently since the last check, the spike is frozen and
+        is not allowed to slide in the next iterations.
+        Additional option : the key "resliding_step" allows for an additional periodic sliding step to be applied on
+        every spike (including the frozen ones).
             -saving_param (tuple): if not None, should have the signature (int, str). Save the measure every
         saving_param[0] iteration to a csv file containing : iter (iteration number), t (execution time at the end of
         the iteration), ak (array of amplitudes), xk (array of locations). The file is saved to the saving_param[1]
@@ -342,14 +344,25 @@ class SFW(ABC):
 
         self.nk = 0
 
-        if slide_once:
-            self.single_slide = True
-            self.freeze_step, resliding_step = 0, 0
+        # checking the sliding options
+        if slide_opt is None:
+            resliding_step = 0
         else:
-            self.freeze_step = freeze_step
-            assert freeze_step >= 0, "freeze_step should be 0 or strictly positive"
+            slide_method = slide_opt.get("method")
+            resliding_step = slide_opt.get("resliding_step", 0)
             assert resliding_step >= 0, "resliding_step should be 0 or strictly positive"
 
+            assert slide_method is not None, "The key 'method' should be specified in slide_opt"
+            if slide_method == 'slide_once':
+                self.slide_control = 1
+            elif slide_method == 'freeze':
+                self.freeze_step = slide_opt.get("freeze_step", 0)
+                assert self.freeze_step >= 0, "freeze_step should be 0 or strictly positive"
+            elif slide_method == 'no_slide':
+                self.slide_control = 2
+            else:
+                print("method '{}' not recognized".format(slide_method))
+        print("freeze:", self.freeze_step, "reslide:", resliding_step)
         if verbose:
             print("Executing on {} cores".format(self.ncores))
             
@@ -472,7 +485,7 @@ class SFW(ABC):
                                                                                time.time() - tstart))
                 print("New amplitudes : {} \n".format(ak_new))
 
-            if slide_once:
+            if self.slide_control > 0:
                 nit_slide, decreased_energy = 0, False
                 if verbose:
                     print("Skipping the sliding step")

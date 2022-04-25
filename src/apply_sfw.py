@@ -66,9 +66,7 @@ if __name__ == "__main__":
 
     # global sfw parameters
     algo_start_cb = meta_param_dict.get("start_cb")
-    freeze_step = meta_param_dict.get("freeze_step", 0)
-    resliding_step = meta_param_dict.get("resliding_step", 0)
-    slide_once = meta_param_dict.get("slide_once", False)
+    slide_opt = meta_param_dict.get("slide_opt", None)
 
     # choose to cut the rir
     cutoff = meta_param_dict.get("cutoff", -1)
@@ -249,10 +247,9 @@ if __name__ == "__main__":
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200, algo_start_cb=algo_start_cb,
-                             freeze_step=freeze_step, resliding_step=resliding_step,
-                             normalization=normalization, spike_merging=False, spherical_search=spherical_search,
-                             use_hard_stop=True, verbose=True, search_method="rough", early_stopping=True, plot=False,
-                             saving_param=save_var, slide_once=slide_once)
+                             slide_opt=slide_opt, normalization=normalization, spike_merging=False,
+                             spherical_search=spherical_search, use_hard_stop=True, verbose=True, search_method="rough",
+                             early_stopping=True, plot=False, saving_param=save_var)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
