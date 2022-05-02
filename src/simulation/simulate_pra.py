@@ -79,7 +79,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         dcutoff = -1
     # assemble the multichannel rir in a single array, N, M the number of time samples and microphones
     measurements, N, M = multichannel_rir_to_vec(room.rir, cutoff=dcutoff)
-
+    measurements = 4*np.pi*measurements  # rescaling factor
     if origin is not None:
         origin = np.array(origin).reshape(1, 3)
         src -= origin
