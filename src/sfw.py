@@ -119,10 +119,10 @@ class SFW(ABC):
         # determining if it is a partial or full sliding step
         n_bounds = len(ini) // (self.d + 1)
 
-        if n_bounds == self.n_active:
-            args = (self.y_freeze, self.n_active)
-        elif n_bounds == self.nk:
+        if n_bounds == self.nk:
             args = (self.y, self.nk)
+        elif n_bounds == self.n_active:
+            args = (self.y_freeze, self.n_active)
         else:
             args = None
             print("invalid bounds vector length for LBFGS-B")
@@ -289,8 +289,8 @@ class SFW(ABC):
 
         Args:
             -grid (array or float): parameter used to specify the grid search. It is passed to the grid initialization
-            function. For the time domain case : if spherical_grid == 0, should be the array of the grid.
-        If spherical_grid == 1, if it is an array it is assumed to be a spherical grid of radius 1 that is scaled
+            function. For the time domain case : if spherical_search == 0, should be the array of the grid.
+        If spherical_search == 1, if it is an array it is assumed to be a spherical grid of radius 1 that is scaled
         accordingly during the algorithm. If it is a float, it is assumed to be the angular step for a spherical grid
         of radius 1, that is scaled depending on the radius r by 1/log(r) to keep a good density of nodes.
             -niter (int): maximal number of iterations
@@ -977,15 +977,20 @@ class FrequencyDomainSFW(SFW):
         # array of observed frequencies
         self.freq_array = np.fft.rfftfreq(N, d=1. / fs) * 2 * np.pi
 
-        self.N_freq = len(self.freq_array)
-
-        self.J = self.M * self.N_freq
+        self.J = self.M * len(self.freq_array)
 
         # compute the FFT of the rir, divide by the normalization constant
         y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, N),
                              axis=-1).flatten() / np.sqrt(2 * np.pi)
 
         super().__init__(y=y_freq, fs=fs, lam=lam, N=N)  # getting attributes and methods from parent class
+
+    def _update_freq(self):
+        self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs) * 2 * np.pi
+        self.J = self.M * len(self.freq_array)
+        self.y = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.time_sfw.N),
+                             axis=-1).flatten() / np.sqrt(2 * np.pi)
+        self.res = self.compute_residue()
 
     def sinc_hat(self, w):
         return 1. * (np.abs(w) <= self.fs * np.pi)  # no 1/fs factor to account for FT approximation with DFT
@@ -1026,9 +1031,25 @@ class FrequencyDomainSFW(SFW):
     def compute_residue(self):
         gk = self.gamma(self.ak, self.xk)
         self.res = self.y - gk
-        self.res_norm = np.mean(np.linalg.norm(self.res.reshape(self.M, self.N_freq), axis=1), axis=0)  # mean residual norm
+        self.res_norm = np.mean(np.linalg.norm(self.res.reshape(self.M, -1), axis=1), axis=0)  # mean residual norm
 
         return self.res
+
+    def _algorithm_start_callback(self, **args):
+        """Cut the RIR in time"""
+        self.time_sfw._algorithm_start_callback(**args)
+        self._update_freq()
+
+    def _extend_rir(self, reason, verbose=False):
+        can_extend = self.time_sfw._extend_rir(reason="stopping criterion met", verbose=verbose)
+        self._update_freq()
+        return can_extend
+
+    def _on_stop(self, verbose=False):
+        """Stop if the time RIR cannot be extended further"""
+        can_extend = self._extend_rir(reason="stopping criterion met", verbose=verbose)
+
+        return not can_extend
 
     def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -1056,7 +1077,7 @@ class FrequencyDomainSFW(SFW):
         self.time_sfw.res = self.time_sfw.y - self.time_sfw.gamma(self.ak, self.xk)
         curr_max, n_max, m_max = -1, 0, 0
         for m in range(self.M):
-            ind_tmp, max_tmp = sliding_window_norm(self.time_sfw.res[m * self.N: (m + 1) * self.N], 3)
+            ind_tmp, max_tmp = sliding_window_norm(self.time_sfw.res[m * self.time_sfw.N: (m + 1) * self.time_sfw.N], 3)
             if max_tmp > curr_max:
                 curr_max = max_tmp
                 n_max, m_max = ind_tmp, m
