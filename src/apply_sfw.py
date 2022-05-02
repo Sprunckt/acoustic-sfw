@@ -236,6 +236,8 @@ if __name__ == "__main__":
         rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
         inv_rot_walls = rot_walls.inv()
         s.mic_pos = mic_pos @ rot_walls.as_matrix()
+        if domain == "frequential":
+            s.time_sfw.mic_pos = mic_pos @ rot_walls.as_matrix()
 
         save_var = meta_param_dict.get("save_path")
         if save_var is not None:
