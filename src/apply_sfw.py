@@ -256,11 +256,14 @@ if __name__ == "__main__":
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
         s.mic_pos = s.mic_pos @ inv_rot_walls.as_matrix()
+        if domain == "frequential":
+            s.time_sfw.mic_pos = s.mic_pos
 
         if domain != "frequential":  # extend the RIR to the maximum length
             s.NN = compute_time_sample(s.global_N, s.fs)
             reconstr_rir = s.gamma(a, x)
         else:
+            s.time_sfw.NN = compute_time_sample(s.time_sfw.global_N, s.fs)
             reconstr_rir = s.time_sfw.gamma(a, x)
 
         ind, dist = compare_arrays(x, src)
