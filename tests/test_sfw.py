@@ -85,12 +85,12 @@ class TestGamma(unittest.TestCase):
 
         # check that the vectorized code matches the PRA simulations
         reconstr_rir = sfw.gamma(ampl1, src1)
-        diff = np.linalg.norm(reconstr_rir/np.max(reconstr_rir) - measurements1/np.max(measurements1))
-        self.assertLessEqual(diff, 0.5)
+        diff = np.linalg.norm(reconstr_rir - measurements1)
+        self.assertLessEqual(diff, 0.1)
 
         # check that  the vectorized code matches the explicit formula
         reconstr_rir2 = plain_gamma(ampl1, src1, fs, N=N1, mic_pos=mic_array1, filt=sfw.sinc_filt)
-        diff2 = np.linalg.norm(reconstr_rir/np.max(reconstr_rir) - reconstr_rir2/np.max(reconstr_rir2))
+        diff2 = np.linalg.norm(reconstr_rir - reconstr_rir2)
         self.assertAlmostEqual(diff2, 0., places=12)
 
     def test_gamma2(self):
@@ -106,12 +106,12 @@ class TestGamma(unittest.TestCase):
 
         # check that the vectorized code matches the PRA simulations
         reconstr_rir = sfw.gamma(ampl1, src1)
-        diff = np.linalg.norm(reconstr_rir/np.max(reconstr_rir) - measurements1/np.max(measurements1))
-        self.assertLessEqual(diff, 1)
+        diff = np.linalg.norm(reconstr_rir - measurements1)
+        self.assertLessEqual(diff, 0.1)
 
         # check that  the vectorized code matches the explicit formula
         reconstr_rir2 = plain_gamma(ampl1, src1, fs, N=N1, mic_pos=mic_array1, filt=sfw.sinc_filt)
-        diff2 = np.linalg.norm(reconstr_rir / np.max(reconstr_rir) - reconstr_rir2 / np.max(reconstr_rir2))
+        diff2 = np.linalg.norm(reconstr_rir - reconstr_rir2)
         self.assertAlmostEqual(diff2, 0., places=12)
 
 
