@@ -41,8 +41,9 @@ def sliding_window_norm(a, win_length):
 
 
 class SFW(ABC):
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float, lam: float = 1e-2, N=0):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float, lam: float = 1e-2, N=0, fc=None):
         self.fs, self.lam = fs, lam
+        self.fc = fs if fc is None else fc
         self.d = 3
         self.N = N
         if type(y) == np.ndarray:
@@ -599,7 +600,7 @@ class SFW(ABC):
 
 class TimeDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2):
+                 fs: float, N: int, lam: float = 1e-2, fc=None):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -623,7 +624,7 @@ class TimeDomainSFW(SFW):
 
         self.J = self.M * N
 
-        super().__init__(y=y, fs=fs, lam=lam, N=N)  # getting attributes and methods from parent class
+        super().__init__(y=y, fs=fs, lam=lam, N=N, fc=fc)  # getting attributes and methods from parent class
         # full rir
         self.global_y = self.y
 
@@ -743,13 +744,13 @@ class TimeDomainSFW(SFW):
         """
         The filter applied for each measurement.
         """
-        return np.sinc(t * self.fs)
+        return np.sinc(t * self.fc)
 
     def sinc_der(self, t):
         """
         Derivate of the filter
         """
-        w = np.pi * self.fs
+        w = np.pi * self.fc
         return (t * np.cos(w * t) - np.sin(w * t) / w) / (t ** 2 + np.finfo(float).eps)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -899,7 +900,7 @@ class TimeDomainSFW(SFW):
 
 class EpsilonTimeDomainSFW(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, eps=1e-3):
+                 fs: float, N: int, lam: float = 1e-2, eps=1e-3, fc=None):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -912,7 +913,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         """
         self.eps = eps
 
-        super().__init__(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos)  # getting attributes and methods from parent class
+        super().__init__(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos, fc=fc)  # getting attributes and methods from parent class
         temp_sfw = TimeDomainSFW(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos)
         self.y = temp_sfw.y.copy()  # overwriting measures initialization
 
@@ -955,7 +956,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
 class FrequencyDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2):
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, fc=None):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -968,7 +969,7 @@ class FrequencyDomainSFW(SFW):
         """
 
         # creating a time sfw object to compute the residual on the RIR (used for grid initialization)
-        self.time_sfw = TimeDomainSFW(y=y, mic_pos=mic_pos, fs=fs, N=N)
+        self.time_sfw = TimeDomainSFW(y=y, mic_pos=mic_pos, fs=fs, N=N, fc=fc)
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
         self.d = mic_pos.shape[1]
@@ -983,7 +984,7 @@ class FrequencyDomainSFW(SFW):
         y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, N),
                              axis=-1).flatten() / np.sqrt(2 * np.pi)
 
-        super().__init__(y=y_freq, fs=fs, lam=lam, N=N)  # getting attributes and methods from parent class
+        super().__init__(y=y_freq, fs=fs, lam=lam, N=N, fc=fc)  # getting attributes and methods from parent class
 
     def _update_freq(self):
         self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs) * 2 * np.pi
@@ -993,7 +994,7 @@ class FrequencyDomainSFW(SFW):
         self.res = self.compute_residue()
 
     def sinc_hat(self, w):
-        return 1. * (np.abs(w) <= self.fs * np.pi)  # no 1/fs factor to account for FT approximation with DFT
+        return 1. * (np.abs(w) <= self.fc * np.pi)  # no 1/fs factor to account for FT approximation with DFT
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
