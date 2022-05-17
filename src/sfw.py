@@ -343,8 +343,6 @@ class SFW(ABC):
         self.max_norm = max_norm
         self.max_ampl = max_ampl
 
-        self.nk = 0
-
         # checking the sliding options
         if slide_opt is None:
             resliding_step = 0
@@ -1015,7 +1013,7 @@ class FrequencyDomainSFW(SFW):
                   * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis]).flatten()
 
-        return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
+        return -np.sum(np.real(self.res * np.conj(gammaj))) / self.lam
 
     def etak_norm1(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -1042,7 +1040,7 @@ class FrequencyDomainSFW(SFW):
         self._update_freq()
 
     def _extend_rir(self, reason, verbose=False):
-        can_extend = self.time_sfw._extend_rir(reason="stopping criterion met", verbose=verbose)
+        can_extend = self.time_sfw._extend_rir(reason=reason, verbose=verbose)
         self._update_freq()
         return can_extend
 
