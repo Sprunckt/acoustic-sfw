@@ -132,10 +132,11 @@ if __name__ == "__main__":
             absorptions = None
 
         # simulate the RIR, the center of the antenna is chosen as the new origin
-        measurements, N, src, ampl, mic_pos, orders = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos,
-                                                                   mic_array=mic_pos, origin=origin,
-                                                                   max_order=max_order, absorptions=absorptions,
-                                                                   cutoff=cutoff)
+        (measurements, N, src, ampl, mic_pos, orders,
+         full_src, full_ampl) = simulate_rir(fs=fs, room_dim=room_dim, src_pos=src_pos, mic_array=mic_pos,
+                                             origin=origin, max_order=max_order, absorptions=absorptions,
+                                             cutoff=cutoff, return_full=True)
+
         domain = meta_param_dict.get("domain")
         if domain is None:
             print("No domain provided, considering the time domain by default")
@@ -156,13 +157,13 @@ if __name__ == "__main__":
 
         if ideal:  # exact theoretical observations
             if domain == "frequential":
-                s = FrequencyDomainSFW(y=(ampl, src), **sfw_init_args)
+                s = FrequencyDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
                 measurements = s.time_sfw.y.copy()
             elif domain == "time_epsilon":
-                s = EpsilonTimeDomainSFW(y=(ampl, src), **sfw_init_args)
+                s = EpsilonTimeDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
                 measurements = s.y
             else:
-                s = TimeDomainSFW(y=(ampl, src), **sfw_init_args)
+                s = TimeDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
                 measurements = s.y
 
         else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
@@ -276,7 +277,10 @@ if __name__ == "__main__":
 
         if algo_start_cb is not None:
             if algo_start_cb.get("n_cut") is not None:
-                dist_dic["cut_ind"] = s.cut_ind
+                if domain == "frequential":
+                    dist_dic["cut_ind"] = s.time_sfw.cut_ind
+                else:
+                    dist_dic["cut_ind"] = s.cut_ind
         # save the position of the microphones
         dist_dic["mic_array"] = s.mic_pos
 

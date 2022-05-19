@@ -12,7 +12,7 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
 
 
 def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
-                 origin=None, absorptions=None, save=None, verbose=False):
+                 origin=None, absorptions=None, save=None, verbose=False, return_full=False, max_src=3000):
     """Simulate a RIR using pyroomacoustics, using the parameters given in a .json configuration file/dictionary of
     parameters.
     The configuration file must contain the following fields :
@@ -59,8 +59,8 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
     room.compute_rir()
 
     # get the image sources and corresponding amplitudes
-    src = room.sources[0].get_images(max_order=max_order).T
-    ampl = room.sources[0].get_damping(max_order=max_order).flatten()
+    full_src = room.sources[0].get_images(max_order=max_order).T
+    full_ampl = room.sources[0].get_damping(max_order=max_order).flatten()
     orders = room.sources[0].orders
 
     if cutoff > 0:
@@ -70,10 +70,14 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         max_dist = cutoff * c
 
         # compute the distances between the sources (n_sources, 3) and microphones (M, 3), shape (M, n_src)
-        dist = np.sqrt(np.sum((src[np.newaxis, :, :] - mic_array[:, np.newaxis, :]) ** 2, axis=2))
+        dist = np.sqrt(np.sum((full_src[np.newaxis, :, :] - mic_array[:, np.newaxis, :]) ** 2, axis=2))
         # find the sources that are at a distance at most max_dist of at least one microphone (shape n_src)
         remaining_src_ind = np.any(dist < max_dist, axis=0)
-        src, ampl, orders = src[remaining_src_ind, :], ampl[remaining_src_ind], orders[remaining_src_ind]
+        src, ampl, orders = full_src[remaining_src_ind, :], full_ampl[remaining_src_ind], orders[remaining_src_ind]
+
+        if return_full:
+            dist_sorted_ind = np.argsort(dist[0])  # indices of the sorted distances to the first microphone
+            full_src, full_ampl = full_src[dist_sorted_ind[:max_src], :], full_ampl[dist_sorted_ind[:max_src]]
 
     else:
         dcutoff = -1
@@ -84,6 +88,8 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         origin = np.array(origin).reshape(1, 3)
         src -= origin
         mic_array -= origin
+        if return_full:
+            full_src -= origin
 
     if type(save) == str:
         res = dict(mic_array=array_to_list(mic_array), image_pos=array_to_list(src),
@@ -95,4 +101,8 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         json.dump(res, fd)
         fd.close()
 
-    return measurements, N, src, ampl, mic_array, orders
+    if return_full:
+        return measurements, N, src, ampl, mic_array, orders, full_src, full_ampl
+    else:
+        return measurements, N, src, ampl, mic_array, orders
+
