@@ -152,9 +152,15 @@ class SFW(ABC):
         return 0.5 * np.sum((self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
 
     def _optigrid(self, x):
+        """
+        Wrapper for the spike selection optimization step
+        """
         return minimize(self.eta, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
 
     def _stop(self, verbose=True):
+        """
+        Called at algorithm definitive stop, handles ultimate sliding step/step saving
+        """
         if self.slide_control == 1:  # sliding once before the end
             print("Last sliding step before stopping")
             ini = np.concatenate([self.ak, self.xk.flatten()])
@@ -206,6 +212,7 @@ class SFW(ABC):
 
     @abstractmethod
     def _grid_initialization_function(self, parameters, verbose):
+        """Functions that configures a grid for the initialization of the step finding step."""
         pass
 
     @abstractmethod
@@ -273,6 +280,9 @@ class SFW(ABC):
         return True
 
     def _it_end_cb(self):
+        """
+        Iteration end callback.
+        """
         # update the residue
         self.compute_residue()
 
@@ -789,7 +799,7 @@ class TimeDomainSFW(SFW):
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
-        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+        return -np.sum(self.res * gammaj) / self.lam
 
     def etak_norm1(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
