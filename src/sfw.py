@@ -374,7 +374,7 @@ class SFW(ABC):
 
         if verbose:
             print("Executing on {} cores".format(self.ncores))
-            
+
         reslide_counter = 0
 
         search_grid = grid
@@ -389,7 +389,7 @@ class SFW(ABC):
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
         self._algorithm_start_callback(**algo_start_cb)
- 
+
         for i in range(niter):
             self.it += 1
             if verbose:
@@ -437,7 +437,7 @@ class SFW(ABC):
 
                 if rough_search:  # perform a finer optimization using the position found as initialization
                     nit = curr_opti_res.nit
-                    self.opt_options["gtol"] = 1e-6
+                    self.opt_options["gtol"] = 1e-10
                     opti_res = self._optigrid(curr_opti_res.x)
                     nit += opti_res.nit
                 else:
@@ -453,7 +453,7 @@ class SFW(ABC):
                 opti_res = self._optigrid(search_grid[ind_max])
                 nit = opti_res.nit
 
-            etaval = np.abs(opti_res.fun)
+            etaval = np.abs(opti_res.fun) / self.lam
             x_new = opti_res.x.reshape([1, self.d])
 
             if verbose:
@@ -799,7 +799,7 @@ class TimeDomainSFW(SFW):
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
-        return -np.sum(self.res * gammaj) / self.lam
+        return -np.sum(self.res * gammaj)
 
     def etak_norm1(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -810,7 +810,7 @@ class TimeDomainSFW(SFW):
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
 
-        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+        return -np.abs(np.sum(self.res * gammaj))
 
     def _jac_etak(self, x):
         diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
@@ -826,7 +826,7 @@ class TimeDomainSFW(SFW):
         # shape (M,3) into (M,)
         jac = (np.sum(tens[:, np.newaxis] * diff, axis=0).flatten())
 
-        return -jac * np.sign(self.etak(x)) / self.lam
+        return -jac * np.sign(self.etak(x))
 
     def _jac_etak_norm1(self, x):
         diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
@@ -848,7 +848,7 @@ class TimeDomainSFW(SFW):
         der_N = (np.sum((- self.sinc_filt(int_term) / dist[:, np.newaxis] / 4 / np.pi).flatten() * self.res)
                  * norm_der / norm2)  # shape (3,)
 
-        return -np.sign(self.etak_norm1(x)) * (der_gam + der_N) / self.lam
+        return -np.sign(self.etak_norm1(x)) * (der_gam + der_N)
 
     def _jac_slide_obj(self, var, y, n_spikes):
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
@@ -956,7 +956,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(dist[:, np.newaxis] ** 2 + self.eps)).flatten()
 
-        return -np.abs(np.sum(self.res * gammaj)) / self.lam
+        return -np.abs(np.sum(self.res * gammaj))
 
     def _get_normalized_fun(self, normalization):
         return self.etak, "3-point", "3-point"
@@ -1023,7 +1023,7 @@ class FrequencyDomainSFW(SFW):
                   * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis]).flatten()
 
-        return -np.sum(np.real(self.res * np.conj(gammaj))) / self.lam
+        return -np.sum(np.real(self.res * np.conj(gammaj)))
 
     def etak_norm1(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -1035,7 +1035,7 @@ class FrequencyDomainSFW(SFW):
                   * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
 
-        return -np.abs(np.sum(self.res * np.conj(gammaj))) / self.lam
+        return -np.abs(np.sum(self.res * np.conj(gammaj)))
 
     def compute_residue(self):
         gk = self.gamma(self.ak, self.xk)
