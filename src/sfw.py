@@ -64,7 +64,7 @@ class SFW(ABC):
 
         self.opt_options = {'gtol': 1e-05, 'norm': np.inf, 'eps': 1.4901161193847656e-08,
                             'maxiter': None, 'disp': False, 'return_all': False, 'finite_diff_rel_step': None}
-        self.eta, self.eta_jac, self.slide_jac = None, None, None
+        self.eta_jac, self.slide_jac = None, None
         self.timer = None
 
         # spike history for freezing spikes
@@ -155,7 +155,7 @@ class SFW(ABC):
         """
         Wrapper for the spike selection optimization step
         """
-        return minimize(self.eta, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
+        return minimize(self.etak, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
 
     def _stop(self, verbose=True):
         """
@@ -216,9 +216,8 @@ class SFW(ABC):
         pass
 
     @abstractmethod
-    def _get_normalized_fun(self, normalization):
-        """Return a tuple of callables containing the normalized eta function and the corresponding jacobians for the
-        eta optimization and sliding steps. normalization=0 should return the default functions."""
+    def _get_normalized_fun(self):
+        """Return a tuple of callables containing the jacobians for the eta optimization and sliding steps. """
         pass
 
     def compute_residue(self):
@@ -290,7 +289,7 @@ class SFW(ABC):
             self.save_list.append([self.it, time.time() - self.timer,
                                    self.ak.copy(), self.xk.copy()])
 
-    def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf, normalization=0,
+    def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf,
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
@@ -306,8 +305,6 @@ class SFW(ABC):
         of radius 1, that is scaled depending on the radius r by 1/log(r) to keep a good density of nodes.
             -niter (int): maximal number of iterations
             -max_ampl (float): upper bound on spikes amplitudes
-            -normalization (int): the normalization to add to gamma for he spike localization step. 0 means no
-        normalization, 1 adds a factor 1/(sqrt(sum(1/dist(x, xm)**2))
             -min_norm (float): minimal norm allowed for the position found at the end of the grid search
             -max_norm (float): used as bounds for the coordinates of the spike locations in each direction
             -use_hard_stop (bool): if True, add max|etak| <= 1 as a stopping condition
@@ -348,7 +345,7 @@ class SFW(ABC):
                 exit(1)
 
         self.timer = time.time()
-        self.eta, self.eta_jac, self.slide_jac = self._get_normalized_fun(normalization)
+        self.eta_jac, self.slide_jac = self._get_normalized_fun()
 
         self.max_norm = max_norm
         self.max_ampl = max_ampl
@@ -388,6 +385,7 @@ class SFW(ABC):
 
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
+        rough_gtol = None
         self._algorithm_start_callback(**algo_start_cb)
 
         for i in range(niter):
@@ -412,7 +410,14 @@ class SFW(ABC):
             if rough_search or search_method == "full":
 
                 if search_method == "rough":  # perform a low precision search
-                    self.opt_options["gtol"] = np.minimum(1e-1, 1e-6/self.lam)
+                    if rough_gtol is None:   # setting rough tolerance for etak optimization
+                        mapping = np.apply_along_axis(self.etak, 1, search_grid)
+                        min_val = np.abs(np.min(mapping))
+                        if min_val < 1:
+                            rough_gtol = 10**-(len(str(int(1/min_val)))-1)
+                        else:
+                            rough_gtol = 10**-(len(str(int(min_val)))-1)
+                    self.opt_options["gtol"] = rough_gtol
 
                 # spreading the loop over multiple processors
                 p = multiprocessing.Pool(self.ncores)
@@ -437,7 +442,7 @@ class SFW(ABC):
 
                 if rough_search:  # perform a finer optimization using the position found as initialization
                     nit = curr_opti_res.nit
-                    self.opt_options["gtol"] = 1e-10
+                    self.opt_options["gtol"] = np.minimum(1e-7, rough_gtol)
                     opti_res = self._optigrid(curr_opti_res.x)
                     nit += opti_res.nit
                 else:
@@ -447,7 +452,7 @@ class SFW(ABC):
                 del gr_opt
 
             else:
-                mapping = np.apply_along_axis(self.eta, 1, search_grid)
+                mapping = np.apply_along_axis(self.etak, 1, search_grid)
                 ind_max = np.argmin(mapping)
                 self.opt_options["gtol"] = 1e-6
                 opti_res = self._optigrid(search_grid[ind_max])
@@ -801,17 +806,6 @@ class TimeDomainSFW(SFW):
 
         return -np.sum(self.res * gammaj)
 
-    def etak_norm1(self, x: np.ndarray) -> float:
-        """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
-        # distances from x (in R^3) to every microphone, shape (M,)
-        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
-
-        # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
-                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
-
-        return -np.abs(np.sum(self.res * gammaj))
-
     def _jac_etak(self, x):
         diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
         # distances from in to every microphone, shape (M,)
@@ -827,28 +821,6 @@ class TimeDomainSFW(SFW):
         jac = (np.sum(tens[:, np.newaxis] * diff, axis=0).flatten())
 
         return -jac * np.sign(self.etak(x))
-
-    def _jac_etak_norm1(self, x):
-        diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
-        # distances from in to every microphone, shape (M,)
-        dist = np.sqrt(np.sum(diff ** 2, axis=1))
-
-        int_term = self.NN[np.newaxis, :] - dist[:, np.newaxis] / c  # shape (M, N)
-
-        norm2 = np.sum(1 / dist ** 2)
-        norm = np.sqrt(norm2)  # float
-        norm_der = - np.sum(diff / dist[:, np.newaxis] ** 4, axis=0) / norm  # shape (3,)
-
-        # sum shape (M,  N) into shape (M,), derivative  of gammaj * N without the xk_i - xm_i factor
-        der_gam = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
-                          / dist[:, np.newaxis] ** 2 / 4 / np.pi / norm) * self.res.reshape(self.M, self.N), axis=1)
-        der_gam = (np.sum(der_gam[:, np.newaxis] * diff, axis=0).flatten())  # shape (3,)
-
-        # derivative of N * gammaj without the xk_i - xm_i factor
-        der_N = (np.sum((- self.sinc_filt(int_term) / dist[:, np.newaxis] / 4 / np.pi).flatten() * self.res)
-                 * norm_der / norm2)  # shape (3,)
-
-        return -np.sign(self.etak_norm1(x)) * (der_gam + der_N)
 
     def _jac_slide_obj(self, var, y, n_spikes):
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
@@ -899,11 +871,108 @@ class TimeDomainSFW(SFW):
             print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
         return search_grid
 
-    def _get_normalized_fun(self, normalization):
-        normalized_eta = [self.etak, self.etak_norm1][normalization]
-        normalized_eta_jac = ["3-point", "3-point"][normalization]  # eta jacobian is broken
+    def _get_normalized_fun(self):
+        normalized_eta_jac = "3-point"  # eta jacobian is broken
         slide_jac = self._jac_slide_obj
-        return normalized_eta, normalized_eta_jac, slide_jac
+        return normalized_eta_jac, slide_jac
+
+
+class TimeDomainSFWNorm1(TimeDomainSFW):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
+                 fs: float, N: int, lam: float = 1e-2, fc=None):
+        """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc)
+
+    def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)  # (M, K, N)
+                  / 4 / np.pi / dist[:, :, np.newaxis] * a[np.newaxis, :, np.newaxis])
+
+        # sum(M, K, N, axis=1) / (K,)
+        return np.sum(gammaj / np.linalg.norm(gammaj, axis=(0, 2))[np.newaxis, :, np.newaxis], axis=1).flatten()
+
+    def etak(self, x: np.ndarray) -> float:
+        """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
+                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
+
+        return -np.sum(self.res * gammaj)
+
+    def _LASSO_step(self):
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
+                  / 4 / np.pi / dist[:, np.newaxis, :] / np.linalg.norm(1 / dist))
+
+        # shape (M, N, K) -> (J, K)
+        gamma_mat = np.reshape(gammaj, newshape=(self.M * self.N, -1))
+
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * self.y)
+        return lasso_fitter, lasso_fitter.coef_.flatten()
+
+    def _get_normalized_fun(self):
+        normalized_eta_jac = "3-point"
+        slide_jac = "3-point"
+        return normalized_eta_jac, slide_jac
+
+
+class TimeDomainSFWNorm2(TimeDomainSFW):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
+                 fs: float, N: int, lam: float = 1e-2, fc=None):
+        """Adds a normalization factor 1/(norm_2(gamma(psi)))."""
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc)
+
+    def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)  # (M, K, N)
+                  / 4 / np.pi / dist[:, :, np.newaxis] * a[np.newaxis, :, np.newaxis])
+
+        # sum(M, K, N, axis=1) / (K,)
+        return np.sum(gammaj / np.linalg.norm(gammaj, axis=(0, 2))[np.newaxis, :, np.newaxis], axis=1).flatten()
+
+    def etak(self, x: np.ndarray) -> float:
+        """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
+        # distances from x (in R^3) to every microphone, shape (M,)
+        dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
+
+        # shape (M, N) to (M*N,)
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
+                  / 4 / np.pi / dist[:, np.newaxis]).flatten()
+
+        return -np.sum(self.res * gammaj) / np.linalg.norm(gammaj)
+
+    def _LASSO_step(self):
+        # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
+
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
+                  / 4 / np.pi / dist[:, np.newaxis, :])
+
+        # shape (M, N, K) -> (J, K)
+        gamma_mat = np.reshape(gammaj / np.linalg.norm(gammaj, axis=(0, 1)), newshape=(self.M * self.N, -1))
+
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * self.y)
+        return lasso_fitter, lasso_fitter.coef_.flatten()
+
+    def _get_normalized_fun(self):
+        normalized_eta_jac = "3-point"
+        slide_jac = "3-point"
+        return normalized_eta_jac, slide_jac
 
 
 class EpsilonTimeDomainSFW(TimeDomainSFW):
@@ -958,8 +1027,8 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
         return -np.abs(np.sum(self.res * gammaj))
 
-    def _get_normalized_fun(self, normalization):
-        return self.etak, "3-point", "3-point"
+    def _get_normalized_fun(self):
+        return "3-point", "3-point"
 
 
 class FrequencyDomainSFW(SFW):
@@ -1105,11 +1174,10 @@ class FrequencyDomainSFW(SFW):
             print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
         return search_grid
 
-    def _get_normalized_fun(self, normalization):
-        normalized_eta = [self.etak, self.etak_norm1][normalization]
+    def _get_normalized_fun(self):
         normalized_eta_jac = "3-point"
         slide_jac = None
-        return normalized_eta, normalized_eta_jac, slide_jac
+        return normalized_eta_jac, slide_jac
 
     def _obj_slide(self, var, y, n_spikes):
         """

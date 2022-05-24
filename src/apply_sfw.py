@@ -1,4 +1,5 @@
-from src.sfw import TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW, compute_time_sample
+from src.sfw import (TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW, compute_time_sample, TimeDomainSFWNorm1,
+                     TimeDomainSFWNorm2)
 import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
@@ -142,6 +143,9 @@ if __name__ == "__main__":
             print("No domain provided, considering the time domain by default")
             domain = "time"
 
+        sf_types = {"time": [TimeDomainSFW, TimeDomainSFWNorm1, TimeDomainSFWNorm2],
+                    "frequential": [FrequencyDomainSFW], "time_epsilon":[EpsilonTimeDomainSFW]}
+
         if domain in ["frequential", "time"]:
             sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
         elif domain == "time_epsilon":
@@ -155,23 +159,16 @@ if __name__ == "__main__":
             print("invalid domain type")  # should not be reached
             exit(1)
 
-        if ideal:  # exact theoretical observations
-            if domain == "frequential":
-                s = FrequencyDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
-                measurements = s.time_sfw.y.copy()
-            elif domain == "time_epsilon":
-                s = EpsilonTimeDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
-                measurements = s.y
-            else:
-                s = TimeDomainSFW(y=(full_ampl, full_src), **sfw_init_args)
-                measurements = s.y
+        normalization = meta_param_dict["normalization"]  # normalization used (0 for default)
 
-        else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
+        if ideal:  # exact theoretical observations
+            s = sf_types[domain][normalization](y=(full_ampl, full_src), **sfw_init_args)
             if domain == "frequential":
-                s = FrequencyDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+                measurements = s.time_sfw.y
             else:
-                sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
-                s = TimeDomainSFW(y=measurements, mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+                measurements = s.y
+        else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
+            s = sf_types[domain][normalization](y=measurements, **sfw_init_args)
 
         # maximum reachable distance
         max_norm = c * N / meta_param_dict["fs"] + 0.5
@@ -196,7 +193,6 @@ if __name__ == "__main__":
             print("invalid path")
             exit(1)
 
-        normalization = meta_param_dict["normalization"]
         min_norm = meta_param_dict["min_norm"]
         spherical_search = meta_param_dict.get("spherical_search", 0)
         stdout = sys.stdout
@@ -250,7 +246,7 @@ if __name__ == "__main__":
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200, algo_start_cb=algo_start_cb,
-                             slide_opt=slide_opt, normalization=normalization, spike_merging=False,
+                             slide_opt=slide_opt, spike_merging=False,
                              spherical_search=spherical_search, use_hard_stop=True, verbose=True, search_method="rough",
                              early_stopping=True, plot=False, saving_param=save_var)
 
