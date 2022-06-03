@@ -1,5 +1,5 @@
 from src.sfw import (TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW, compute_time_sample, TimeDomainSFWNorm1,
-                     TimeDomainSFWNorm2)
+                     TimeDomainSFWNorm2, FrequencyDomainSFWNorm1)
 import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
@@ -144,7 +144,7 @@ if __name__ == "__main__":
             domain = "time"
 
         sf_types = {"time": [TimeDomainSFW, TimeDomainSFWNorm1, TimeDomainSFWNorm2],
-                    "frequential": [FrequencyDomainSFW], "time_epsilon":[EpsilonTimeDomainSFW]}
+                    "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1], "time_epsilon":[EpsilonTimeDomainSFW]}
 
         if domain in ["frequential", "time"]:
             sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
