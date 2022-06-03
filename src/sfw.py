@@ -12,7 +12,6 @@ from abc import ABC, abstractmethod
 import os
 
 stop_tol = 1e-6
-deletion_tol = 0.05
 merge_tol = 0.02
 
 ampl_freeze_threshold = 0.05
@@ -41,7 +40,8 @@ def sliding_window_norm(a, win_length):
 
 
 class SFW(ABC):
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float, lam: float = 1e-2, N=0, fc=None):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float,
+                 lam: float = 1e-2, N: int = 0, fc: float = None, deletion_tol: float = 0.05):
         self.fs, self.lam = fs, lam
         self.fc = fs if fc is None else fc
         self.d = 3
@@ -81,6 +81,8 @@ class SFW(ABC):
         self.save_list = []
 
         self.ncores = len(os.sched_getaffinity(0))
+
+        self.deletion_tol = deletion_tol
 
     @abstractmethod
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -386,6 +388,7 @@ class SFW(ABC):
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
         rough_gtol = None
+
         self._algorithm_start_callback(**algo_start_cb)
 
         for i in range(niter):
@@ -545,7 +548,7 @@ class SFW(ABC):
                             print("Energy increased, sliding not applied - retrying next iteration")
 
             # deleting null amplitude spikes
-            ind_null = np.asarray(np.abs(self.ak) < deletion_tol)
+            ind_null = np.asarray(np.abs(self.ak) < self.deletion_tol)
             self.ak = self.ak[~ind_null]
             self.xk = self.xk[~ind_null, :]
             self.nk = len(self.ak)
@@ -613,7 +616,7 @@ class SFW(ABC):
 
 class TimeDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -637,7 +640,8 @@ class TimeDomainSFW(SFW):
 
         self.J = self.M * N
 
-        super().__init__(y=y, fs=fs, lam=lam, N=N, fc=fc)  # getting attributes and methods from parent class
+        # getting attributes and methods from parent class
+        super().__init__(y=y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)
         # full rir
         self.global_y = self.y
 
@@ -879,9 +883,10 @@ class TimeDomainSFW(SFW):
 
 class TimeDomainSFWNorm1(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=1e-2):
         """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
-        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc)
+        y = TimeDomainSFW(y, mic_pos, fs, N, lam, fc).y  # necessary if y if a tuple of exact amplitudes and images
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -891,7 +896,7 @@ class TimeDomainSFWNorm1(TimeDomainSFW):
                   / 4 / np.pi / dist[:, :, np.newaxis] * a[np.newaxis, :, np.newaxis])
 
         # sum(M, K, N, axis=1) / (K,)
-        return np.sum(gammaj / np.linalg.norm(gammaj, axis=(0, 2))[np.newaxis, :, np.newaxis], axis=1).flatten()
+        return np.sum(gammaj / np.linalg.norm(1/dist, axis=0)[np.newaxis, :, np.newaxis], axis=1).flatten()
 
     def etak(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -909,7 +914,7 @@ class TimeDomainSFWNorm1(TimeDomainSFW):
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
-                  / 4 / np.pi / dist[:, np.newaxis, :] / np.linalg.norm(1 / dist))
+                  / 4 / np.pi / dist[:, np.newaxis, :] / np.linalg.norm(1 / dist, axis=0)[np.newaxis, np.newaxis, :])
 
         # shape (M, N, K) -> (J, K)
         gamma_mat = np.reshape(gammaj, newshape=(self.M * self.N, -1))
@@ -922,25 +927,27 @@ class TimeDomainSFWNorm1(TimeDomainSFW):
 
     def _get_normalized_fun(self):
         normalized_eta_jac = "3-point"
-        slide_jac = "3-point"
+        slide_jac = None
         return normalized_eta_jac, slide_jac
 
 
 class TimeDomainSFWNorm2(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-3):
         """Adds a normalization factor 1/(norm_2(gamma(psi)))."""
-        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc)
+        y = TimeDomainSFW(y, mic_pos, fs, N, lam, fc).y
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)  # (M, K, N)
-                  / 4 / np.pi / dist[:, :, np.newaxis] * a[np.newaxis, :, np.newaxis])
+                  / 4 / np.pi / dist[:, :, np.newaxis])
 
         # sum(M, K, N, axis=1) / (K,)
-        return np.sum(gammaj / np.linalg.norm(gammaj, axis=(0, 2))[np.newaxis, :, np.newaxis], axis=1).flatten()
+        return np.sum(gammaj * a[np.newaxis, :, np.newaxis]
+                      / (np.linalg.norm(gammaj, axis=(0, 2))[np.newaxis, :, np.newaxis]+1e-32), axis=1).flatten()
 
     def etak(self, x: np.ndarray) -> float:
         """Normalization of etak by 1/norm_2([dist(x, xm)]_m)"""
@@ -951,7 +958,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
                   / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
-        return -np.sum(self.res * gammaj) / np.linalg.norm(gammaj)
+        return -np.sum(self.res * gammaj) / (np.linalg.norm(gammaj)+1e-32)
 
     def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -971,7 +978,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
 
     def _get_normalized_fun(self):
         normalized_eta_jac = "3-point"
-        slide_jac = "3-point"
+        slide_jac = None
         return normalized_eta_jac, slide_jac
 
 
@@ -1033,7 +1040,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
 class FrequencyDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, fc=None):
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, fc=None, deletion_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -1061,7 +1068,7 @@ class FrequencyDomainSFW(SFW):
         y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, N),
                              axis=-1).flatten() / np.sqrt(2 * np.pi)
 
-        super().__init__(y=y_freq, fs=fs, lam=lam, N=N, fc=fc)  # getting attributes and methods from parent class
+        super().__init__(y=y_freq, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)  # getting attributes and methods from parent class
 
     def _update_freq(self):
         self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs) * 2 * np.pi
