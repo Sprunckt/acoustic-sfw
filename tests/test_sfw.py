@@ -37,7 +37,7 @@ def plain_eta(r, res, fs, N, mic_pos, filt):
     for m in range(M):
         for n in range(N):
             y[m, n] = gammaj(r, fs, n, mic_pos[m], filt)
-    return np.sum(res * y.flatten())
+    return -np.sum(res * y.flatten())
 
 
 def plain_slide_jac(a, x, y, fs, N, mic_pos, filt, filt_der, lam):
@@ -65,8 +65,7 @@ def plain_eta_jac(x, res, fs, N, mic_pos, filt, filt_der, lam):
     for m in range(M):
         for n in range(N):
             jac += gammaj_der(x, fs, n, mic_pos[m], filt, filt_der) * res[m*N + n]
-    jac = - jac * np.sign(plain_eta(x, res, fs, N, mic_pos, filt))
-    return jac / lam
+    return -jac
 
 
 class TestGamma(unittest.TestCase):
@@ -138,7 +137,7 @@ class TestEta(unittest.TestCase):
             sfw.res = res
             for r in grid:
                 self.assertAlmostEqual(sfw.etak(r.flatten()),
-                                       -np.abs(plain_eta(r, res, fs, N1, mic_array1, sfw.sinc_filt)) / sfw.lam)
+                                       float(plain_eta(r, res, fs, N1, mic_array1, sfw.sinc_filt)))
 
     def test_jac_slide(self):
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
