@@ -942,8 +942,8 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)  # (M, K, N)
-                  / 4 / np.pi / dist[:, :, np.newaxis])
+        # (M, K, N)
+        gammaj = self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c) / dist[:, :, np.newaxis]
 
         # sum(M, K, N, axis=1) / (K,)
         return np.sum(gammaj * a[np.newaxis, :, np.newaxis]
@@ -955,8 +955,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c)
-                  / 4 / np.pi / dist[:, np.newaxis]).flatten()
+        gammaj = (self.sinc_filt(self.NN[np.newaxis, :] - dist[:, np.newaxis] / c) / dist[:, np.newaxis]).flatten()
 
         return -np.sum(self.res * gammaj) / (np.linalg.norm(gammaj)+1e-32)
 
@@ -976,9 +975,48 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
                          scale * self.y)
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
+    def _jac_slide_obj(self, var, y, n_spikes):
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
+        diff = x[:, np.newaxis, :] - self.mic_pos[np.newaxis, :, :]  # difference, shape (K, M, 3)
+        # distances from the diracs contained in x to every microphone, shape (K,M), K=len(x)
+        dist = np.sqrt(np.sum(diff ** 2, axis=2))
+
+        jac = np.zeros(n_spikes * 4)
+
+        int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
+        # shape (K, M, N) = gamma_j(x_k)*dist
+        gamma_tens = self.sinc_filt(int_term) / dist[:, :, np.newaxis]
+
+        # gamma norm, shape (K,)
+        gamma_norm = np.sqrt(np.sum(gamma_tens**2, axis=(1, 2)))
+
+        # sum_k ak.gamma_j(x_k) - y_j : sum(K, M, N, axis=1) - y = -residue
+        residue = (np.sum(gamma_tens * a[:, np.newaxis, np.newaxis]
+                          / gamma_norm[:, np.newaxis, np.newaxis], axis=0).flatten() - y)
+
+        # derivative in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
+        jac[:n_spikes] = (np.sum(residue.reshape(self.M, self.N)[np.newaxis, :, :] * gamma_tens, axis=(1, 2))
+                          / gamma_norm + self.lam*np.sign(a))
+
+        # common factor in the derivative in x_k (shape (K, M, N, 3))
+        common_factor = ((gamma_tens + self.sinc_der(int_term) / c)[:, :, :, np.newaxis]
+                         * diff[:, :, np.newaxis, :])
+
+        # shape (K, M, N, 3), derivative in x_k
+        first_term = (- common_factor / gamma_norm[:, np.newaxis, np.newaxis, np.newaxis]
+                      / (dist**2)[:, :, np.newaxis, np.newaxis])  # shape (K, M, N, 3)
+        gamma_der = (first_term +
+                     np.sum(common_factor*gamma_tens[:, :, :, np.newaxis]  # final shape (K,3)
+                            / (dist**2)[:, :, np.newaxis, np.newaxis], axis=(1, 2))[:, np.newaxis, np.newaxis, :]
+                     * gamma_tens[:, :, :, np.newaxis] / (gamma_norm**3)[:, np.newaxis, np.newaxis, np.newaxis])
+        jac[n_spikes:] = (np.repeat(a, 3) * np.sum(gamma_der
+                                                   * residue.reshape(self.M, self.N)[np.newaxis, :, :, np.newaxis],
+                                                   axis=(1, 2)).reshape(-1,))
+        return jac
+
     def _get_normalized_fun(self):
         normalized_eta_jac = "3-point"
-        slide_jac = None
+        slide_jac = self._jac_slide_obj
         return normalized_eta_jac, slide_jac
 
 
