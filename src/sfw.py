@@ -876,7 +876,7 @@ class TimeDomainSFW(SFW):
         return search_grid
 
     def _get_normalized_fun(self):
-        normalized_eta_jac = "3-point"  # eta jacobian is broken
+        normalized_eta_jac = self._jac_etak
         slide_jac = self._jac_slide_obj
         return normalized_eta_jac, slide_jac
 
@@ -959,6 +959,31 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
 
         return -np.sum(self.res * gammaj) / (np.linalg.norm(gammaj)+1e-32)
 
+    def _jac_etak(self, x):
+        diff = x[:, np.newaxis] - self.mic_pos[:, :].T  # difference, shape (3, M)
+        # distances from in to every microphone, shape (M,)
+        dist = np.sqrt(np.sum(diff ** 2, axis=0))
+
+        int_term = self.NN[np.newaxis, :] - dist[:, np.newaxis] / c  # shape (M, N)
+
+        # shape (M, N) = gamma_j(x)
+        gamma_tens = self.sinc_filt(int_term) / dist[:, np.newaxis]
+        # gamma norm, float
+        gamma_norm = np.linalg.norm(gamma_tens)
+
+        # common factor in the derivative in x_k (shape (3, M, N))
+        common_factor = ((gamma_tens + self.sinc_der(int_term) / c)[np.newaxis, :, :]
+                         * diff[:, :, np.newaxis])
+
+        # shape (3, M, N)
+        first_term = (- common_factor / gamma_norm
+                      / (dist ** 2)[np.newaxis, :, np.newaxis])
+        return -np.sum((first_term
+                       + np.sum(common_factor * gamma_tens[np.newaxis, :, :]  # final shape (3,)
+                                / (dist ** 2)[np.newaxis, :, np.newaxis], axis=(1, 2))[:, np.newaxis, np.newaxis]
+                       * gamma_tens[np.newaxis, :, :] / (gamma_norm ** 3))
+                       * self.res.reshape(self.M, self.N)[np.newaxis, :, :], axis=(1, 2))
+
     def _LASSO_step(self):
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
@@ -984,7 +1009,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         jac = np.zeros(n_spikes * 4)
 
         int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
-        # shape (K, M, N) = gamma_j(x_k)*dist
+        # shape (K, M, N) = gamma_j(x_k)
         gamma_tens = self.sinc_filt(int_term) / dist[:, :, np.newaxis]
 
         # gamma norm, shape (K,)
@@ -1015,7 +1040,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         return jac
 
     def _get_normalized_fun(self):
-        normalized_eta_jac = "3-point"
+        normalized_eta_jac = self._jac_etak
         slide_jac = self._jac_slide_obj
         return normalized_eta_jac, slide_jac
 

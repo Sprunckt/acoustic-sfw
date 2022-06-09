@@ -136,6 +136,22 @@ def plain_eta_jac(x, res, fs, N, mic_pos, filt, filt_der, lam):
     return -jac
 
 
+def plain_eta_jac_norm2(x, res, fs, N, mic_pos, filt, filt_der, lam):
+    M = len(mic_pos)
+    jac = np.zeros(3)
+    norm = 0
+
+    for m in range(M):
+        for n in range(N):
+            norm += (gammaj(x, fs, n, mic_pos[m], filt)*4*np.pi) ** 2
+    norm = np.sqrt(norm)
+
+    for m in range(M):
+        for n in range(N):
+            jac += gammaj_der_norm2(x, fs, n, m, mic_pos, filt, filt_der, M, N, norm) * res[m*N + n]
+    return -jac
+
+
 class TestGamma(unittest.TestCase):
     """Testing compliance to PRA simulations and to the plain written formula (with explicit loops)"""
     def test_gamma1(self):
@@ -300,6 +316,28 @@ class TestEta(unittest.TestCase):
                 # test compliance to finite differences
                 fd = (sfw.etak(varp) - sfw.etak(var)) / dt
                 self.assertAlmostEqual(sfw_jac[t], fd, places=5)
+
+    def test_jac_eta_normalized2(self):
+        """Test compliance to the plain written eta jacobian without normalization"""
+        sfw = src.sfw.TimeDomainSFWNorm2(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
+        sfw.nk = 5  # number of sources considered
+
+        # points used for comparison
+        lvar = [np.arange(1, 4, dtype=float), np.array([0.321, -4, -1.342]), np.array([-1.457, 10, 0.])]
+        dt = 1e-7
+
+        for var in lvar:
+            sfw_jac = sfw._jac_etak(var)
+            plain_jac = plain_eta_jac_norm2(var, res=sfw.y, fs=self.fs, N=self.N, mic_pos=sfw.mic_pos,
+                                            filt=sfw.sinc_filt, filt_der=sfw.sinc_der, lam=sfw.lam)
+
+            for t in range(3):
+                self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
+                varp = var.copy()
+                varp[t] += dt
+                # test compliance to finite differences
+                fd = (sfw.etak(varp) - sfw.etak(var)) / dt
+                self.assertAlmostEqual(sfw_jac[t], fd, places=3)
 
 
 class TestGammaFreq(unittest.TestCase):
