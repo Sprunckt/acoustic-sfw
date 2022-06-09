@@ -821,10 +821,10 @@ class TimeDomainSFW(SFW):
         tens = np.sum(((- self.sinc_filt(int_term) / dist[:, np.newaxis] - self.sinc_der(int_term) / c)
                        / dist[:, np.newaxis] ** 2 / 4 / np.pi) * self.res.reshape(self.M, self.N), axis=1)
 
-        # shape (M,3) into (M,)
+        # shape (M,3) into (3,)
         jac = (np.sum(tens[:, np.newaxis] * diff, axis=0).flatten())
 
-        return -jac * np.sign(self.etak(x))
+        return -jac
 
     def _jac_slide_obj(self, var, y, n_spikes):
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
