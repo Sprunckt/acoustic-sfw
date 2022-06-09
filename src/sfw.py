@@ -777,7 +777,7 @@ class TimeDomainSFW(SFW):
         # sum( M, K, N, axis=1)
         return np.sum(self.sinc_filt(self.NN[np.newaxis, :] - dist[:, :, np.newaxis] / c)
                       / 4 / np.pi / dist[:, :, np.newaxis]
-                      * a[np.newaxis, :, np.newaxis], axis=1).flatten()
+                      * a[np.newaxis, :, np.newaxis], axis=1).reshape(-1)
 
     def compute_residue(self):
         gk = self.gamma(self.ak, self.xk)
@@ -839,18 +839,18 @@ class TimeDomainSFW(SFW):
         gamma_tens = self.sinc_filt(int_term) / 4 / np.pi / dist[:, :, np.newaxis]
 
         # sum_k ak.gamma_j(x_k) - y_j : sum(M, K, N, axis=1) - y = -residue
-        residue = (np.sum(gamma_tens * a[np.newaxis, :, np.newaxis], axis=1).flatten() - y)
+        residue = (np.einsum("mkn,k->mn", gamma_tens, a, optimize='greedy').reshape(-1) - y)
         # derivates in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
-        jac[:n_spikes] = (np.sum(residue.reshape(self.M, self.N)[:, np.newaxis, :] * gamma_tens, axis=(0, 2))
+        jac[:n_spikes] = (np.einsum("mn,mkn->k", residue.reshape(self.M, self.N), gamma_tens, optimize='greedy')
                           + self.lam * np.sign(a))
 
-        # shape (M, K, N), derivate without the xk_i - xm_i factor
+        # shape (M, K, N), derivative without the xk_i - xm_i factor
         gamma_tens = ((- gamma_tens - self.sinc_der(int_term) / 4 / np.pi / c)
                       / dist[:, :, np.newaxis] ** 2 * residue.reshape(self.M, self.N)[:, np.newaxis, :])
 
         # original shape (M,K,3,N)
-        jac[n_spikes:] = (np.repeat(a, 3) * np.sum(gamma_tens[:, :, np.newaxis, :] * diff[:, :, :, np.newaxis],
-                                                   axis=(0, 3)).flatten())
+        jac[n_spikes:] = (np.einsum("k,mkn,mki->ki", a, gamma_tens, diff, optimize='greedy').reshape(-1))
+
         return jac
 
     def _grid_initialization_function(self, parameter, verbose, **params):
@@ -1002,41 +1002,39 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
 
     def _jac_slide_obj(self, var, y, n_spikes):
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
-        diff = x[:, np.newaxis, :] - self.mic_pos[np.newaxis, :, :]  # difference, shape (K, M, 3)
-        # distances from the diracs contained in x to every microphone, shape (K,M), K=len(x)
+        diff = x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]  # difference, shape (M, K, 3)
+        # distances from the diracs contained in x to every microphone, shape (M, K), K=len(x)
         dist = np.sqrt(np.sum(diff ** 2, axis=2))
 
         jac = np.zeros(n_spikes * 4)
 
         int_term = self.NN[np.newaxis, np.newaxis, :] - dist[:, :, np.newaxis] / c
-        # shape (K, M, N) = gamma_j(x_k)
+        # shape (M, K, N) = gamma_j(x_k)
         gamma_tens = self.sinc_filt(int_term) / dist[:, :, np.newaxis]
 
         # gamma norm, shape (K,)
-        gamma_norm = np.sqrt(np.sum(gamma_tens**2, axis=(1, 2)))
+        gamma_norm = np.sqrt(np.sum(gamma_tens**2, axis=(0, 2)))
 
         # sum_k ak.gamma_j(x_k) - y_j : sum(K, M, N, axis=1) - y = -residue
-        residue = (np.sum(gamma_tens * a[:, np.newaxis, np.newaxis]
-                          / gamma_norm[:, np.newaxis, np.newaxis], axis=0).flatten() - y)
+        residue = (np.einsum("mkn,k->mn", gamma_tens, a / gamma_norm, optimize='greedy').reshape(-1) - y)
 
-        # derivative in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and N)
-        jac[:n_spikes] = (np.sum(residue.reshape(self.M, self.N)[np.newaxis, :, :] * gamma_tens, axis=(1, 2))
+        # derivative in ak : multiply the residue by gammaj(x_k) and sum on j (meaning m and n)
+        jac[:n_spikes] = (np.einsum("mn,mkn->k", residue.reshape(self.M, self.N), gamma_tens, optimize='greedy')
                           / gamma_norm + self.lam*np.sign(a))
 
-        # common factor in the derivative in x_k (shape (K, M, N, 3))
+        # common factor in the derivative in x_k (shape (M, K, N, 3))
         common_factor = ((gamma_tens + self.sinc_der(int_term) / c)[:, :, :, np.newaxis]
                          * diff[:, :, np.newaxis, :])
 
-        # shape (K, M, N, 3), derivative in x_k
-        first_term = (- common_factor / gamma_norm[:, np.newaxis, np.newaxis, np.newaxis]
+        # shape (M, K, N, 3), derivative in x_k
+        first_term = (- common_factor / gamma_norm[np.newaxis, :, np.newaxis, np.newaxis]
                       / (dist**2)[:, :, np.newaxis, np.newaxis])  # shape (K, M, N, 3)
         gamma_der = (first_term +
-                     np.sum(common_factor*gamma_tens[:, :, :, np.newaxis]  # final shape (K,3)
-                            / (dist**2)[:, :, np.newaxis, np.newaxis], axis=(1, 2))[:, np.newaxis, np.newaxis, :]
-                     * gamma_tens[:, :, :, np.newaxis] / (gamma_norm**3)[:, np.newaxis, np.newaxis, np.newaxis])
-        jac[n_spikes:] = (np.repeat(a, 3) * np.sum(gamma_der
-                                                   * residue.reshape(self.M, self.N)[np.newaxis, :, :, np.newaxis],
-                                                   axis=(1, 2)).reshape(-1,))
+                     np.einsum("mkni,mkn->ki", common_factor, gamma_tens / (dist**2)[:, :, np.newaxis],
+                               optimize='greedy')[np.newaxis, :, np.newaxis, :]  # final shape (K,3)
+                     * gamma_tens[:, :, :, np.newaxis] / (gamma_norm**3)[np.newaxis, :, np.newaxis, np.newaxis])
+        jac[n_spikes:] = (np.einsum("mkni,k,mn->ki", gamma_der, a, residue.reshape(self.M, self.N),
+                                    optimize='greedy').reshape(-1))
         return jac
 
     def _get_normalized_fun(self):
