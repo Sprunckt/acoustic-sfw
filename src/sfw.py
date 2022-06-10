@@ -4,7 +4,7 @@ from typing import Union, Tuple
 import pandas as pd
 from scipy.optimize import minimize
 from optimparallel import minimize_parallel
-from sklearn.linear_model import Lasso
+from sklearn.linear_model import Lasso, LinearRegression
 from src.simulation.utils import (disp_measure, c, cut_vec_rir, create_grid_spherical)
 import multiprocessing
 import time
@@ -108,6 +108,15 @@ class SFW(ABC):
         coefficients)
         """
         pass
+
+    def _get_amplitude_fitter(self):
+        """
+        Regression model used for amplitude optimization (LASSO if lambda > 0).
+        """
+        if self.lam > 0:
+            return Lasso(positive=True, alpha=self.lam)
+        else:
+            return LinearRegression(positive=True)
 
     def _obj_lasso(self, a):
         """
@@ -352,6 +361,11 @@ class SFW(ABC):
         self.max_norm = max_norm
         self.max_ampl = max_ampl
 
+        if self.lam == 0.:
+            use_hard_stop = False
+            if verbose:
+                print("lambda=0, disabling eta stopping criterion")
+
         # checking the sliding options
         if slide_opt is None:
             resliding_step = 0
@@ -461,7 +475,10 @@ class SFW(ABC):
                 opti_res = self._optigrid(search_grid[ind_max])
                 nit = opti_res.nit
 
-            etaval = np.abs(opti_res.fun) / self.lam
+            if self.lam > 0.:
+                etaval = np.abs(opti_res.fun) / self.lam
+            else:
+                etaval = np.abs(opti_res.fun)
             x_new = opti_res.x.reshape([1, self.d])
 
             if verbose:
@@ -498,8 +515,9 @@ class SFW(ABC):
             lasso_fitter, ak_new = self._LASSO_step()
 
             if verbose:
-                print("LASSO solved in {} iterations, exec time : {} s".format(lasso_fitter.n_iter_,
-                                                                               time.time() - tstart))
+                if self.lam > 0:
+                    print("LASSO solved in {} iterations, exec time : {} s".format(lasso_fitter.n_iter_,
+                                                                                   time.time() - tstart))
                 print("New amplitudes : {} \n".format(ak_new))
 
             if self.slide_control > 0:
@@ -794,7 +812,7 @@ class TimeDomainSFW(SFW):
         gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
                                / 4 / np.pi / dist[:, np.newaxis, :], newshape=(self.M * self.N, -1))
 
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * self.y)
@@ -919,7 +937,7 @@ class TimeDomainSFWNorm1(TimeDomainSFW):
         # shape (M, N, K) -> (J, K)
         gamma_mat = np.reshape(gammaj, newshape=(self.M * self.N, -1))
 
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * self.y)
@@ -994,7 +1012,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
         # shape (M, N, K) -> (J, K)
         gamma_mat = np.reshape(gammaj / np.linalg.norm(gammaj, axis=(0, 1)), newshape=(self.M * self.N, -1))
 
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * self.y)
@@ -1079,7 +1097,7 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         gamma_mat = np.reshape(self.sinc_filt(self.NN[np.newaxis, :, np.newaxis] - dist[:, np.newaxis, :] / c)
                                / 4 / np.pi / np.sqrt(dist[:, np.newaxis, :] ** 2 + self.eps), newshape=(self.J, -1))
 
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
                          scale * self.y)
@@ -1198,7 +1216,7 @@ class FrequencyDomainSFW(SFW):
 
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
                                     np.imag(gamma_mat_cpx)], axis=0)
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         target = np.concatenate([np.real(self.y), np.imag(self.y)]).reshape(-1, 1)
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
@@ -1294,7 +1312,7 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
 
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
                                     np.imag(gamma_mat_cpx)], axis=0)
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         target = np.concatenate([np.real(self.y), np.imag(self.y)]).reshape(-1, 1)
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
         lasso_fitter.fit(scale * gamma_mat,
