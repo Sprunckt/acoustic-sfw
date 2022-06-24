@@ -75,6 +75,8 @@ if __name__ == "__main__":
     # global parameters for the set of experiments
     lam, ideal = meta_param_dict["lambda"], meta_param_dict["ideal"]
     fs = meta_param_dict["fs"]  # sampling frequency
+    fc = meta_param_dict.get("fc", fs)  # cutoff frequency, defaults to fs
+
     ms = meta_param_dict.get("mic_size")  # array size factor
     max_order = meta_param_dict["max_order"]  # maximum order of reflections used
 
@@ -146,14 +148,16 @@ if __name__ == "__main__":
         sf_types = {"time": [TimeDomainSFW, TimeDomainSFWNorm1, TimeDomainSFWNorm2],
                     "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1], "time_epsilon":[EpsilonTimeDomainSFW]}
 
-        if domain in ["frequential", "time"]:
-            sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam)
+        sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam)
+
+        if domain == "frequential":
+            sfw_init_args["freq_range"] = meta_param_dict.get("freq_range")
         elif domain == "time_epsilon":
             eps = meta_param_dict.get("eps")
             if eps is None:
                 print("epsilon must be provided")
                 exit(1)
-            sfw_init_args = dict(mic_pos=mic_pos, fs=fs, N=N, lam=lam, eps=eps)
+            sfw_init_args["eps"] = eps
         else:
             sfw_init_args = {}
             print("invalid domain type")  # should not be reached

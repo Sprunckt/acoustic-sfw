@@ -1119,16 +1119,19 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
 class FrequencyDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, fc=None, deletion_tol=5e-2):
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
         amplitudes and positions of the measure that has to be reconstructed. In that last case the ideal observations
         are computed.
-            -mic_pos (ndarray) : positions of the microphones (shape (M,d))
-            -fs (float) : sampling frequency
-            -N (int) : number of time samples
-            -lam (float) : penalization parameter of the BLASSO.
+            -mic_pos (ndarray): positions of the microphones (shape (M,d))
+            -fs (float): sampling frequency
+            -N (int): number of time samples
+            -lam (float): penalization parameter of the BLASSO.
+            -fc  (float): cutting frequency for the time response.
+            - obs_freq (tuple): tuple of two floats delimiting the range of observed frequencies. Only the frequencies
+            in the range [obs_freq[0], obs_freq[1]] will be considered.
         """
 
         # creating a time sfw object to compute the residual on the RIR (used for grid initialization)
@@ -1138,34 +1141,40 @@ class FrequencyDomainSFW(SFW):
         self.d = mic_pos.shape[1]
         assert 1 < self.d < 4, "Invalid dimension d"
 
-        # array of observed frequencies
-        self.freq_array = np.fft.rfftfreq(N, d=1. / fs) * 2 * np.pi
+        self.obs_freq = (0., fs) if freq_range is None else freq_range
+        self.fs = fs
 
-        self.J = self.M * len(self.freq_array)
+        self._update_rir()
 
-        # compute the FFT of the rir, divide by the normalization constant
-        y_freq = np.fft.rfft(self.time_sfw.y.reshape(self.M, N),
-                             axis=-1).flatten() / np.sqrt(2 * np.pi)
-
-        super().__init__(y=y_freq, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)  # getting attributes and methods from parent class
+        # getting attributes and methods from parent class
+        super().__init__(y=self.y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)
 
     def _update_freq(self):
-        self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs) * 2 * np.pi
+        """
+        Update the frequency array depending on the length of the time response stored in time_sfw.
+        """
+        # array of observed frequencies, normalized by 2pi to reduce computations in Fourier transform
+        self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs)
+        self.freq_mask = (self.freq_array >= self.obs_freq[0]) & (self.freq_array < self.obs_freq[1])
+        self.freq_array = self.freq_array[self.freq_mask] * 2 * np.pi
         self.J = self.M * len(self.freq_array)
-        self.y = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.time_sfw.N),
-                             axis=-1).flatten() / np.sqrt(2 * np.pi)
-        self.res = self.compute_residue()
 
-    def sinc_hat(self, w):
-        return 1. * (np.abs(w) <= self.fc * np.pi)  # no 1/fs factor to account for FT approximation with DFT
+    def _update_rir(self):
+        """
+        Update the frequency response depending on the current length of the time response stored in time_sfw.
+        """
+        self._update_freq()
+
+        # compute the FFT of the rir, divide by the normalization constant
+        self.y = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.time_sfw.N),
+                             axis=-1)[:, self.freq_mask].flatten() / np.sqrt(2 * np.pi)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # sum(M, K, N_freq, axis=1)
-        return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                      * np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
+        return np.sum(np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
                       / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
@@ -1174,8 +1183,7 @@ class FrequencyDomainSFW(SFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, Nfreq) to (M*Nfreq,)
-        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
-                  * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
+        gammaj = (np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis]).flatten()
 
         return -np.sum(np.real(self.res * np.conj(gammaj)))
@@ -1190,11 +1198,13 @@ class FrequencyDomainSFW(SFW):
     def _algorithm_start_callback(self, **args):
         """Cut the RIR in time"""
         self.time_sfw._algorithm_start_callback(**args)
-        self._update_freq()
+        self._update_rir()
+        self.res = self.compute_residue()
 
     def _extend_rir(self, reason, verbose=False):
         can_extend = self.time_sfw._extend_rir(reason=reason, verbose=verbose)
-        self._update_freq()
+        self._update_rir()
+        self.res = self.compute_residue()
         return can_extend
 
     def _on_stop(self, verbose=False):
@@ -1208,9 +1218,7 @@ class FrequencyDomainSFW(SFW):
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N_freq, K) -> (J, K)
-        gamma_mat_cpx = np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
-                                   * np.exp(
-            -1j * self.freq_array[np.newaxis, :, np.newaxis] * dist[:, np.newaxis, :] / c)
+        gamma_mat_cpx = np.reshape(np.exp(-1j * self.freq_array[np.newaxis, :, np.newaxis] * dist[:, np.newaxis, :] / c)
                                    / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis, :],
                                    newshape=(self.J, -1))
 
