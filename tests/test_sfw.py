@@ -53,6 +53,28 @@ def plain_gamma(a, x, fs, N, mic_pos, filt):
     return res
 
 
+def gammaj_freq(fr, x, mic):
+    d = np.linalg.norm(x-mic)
+    return np.exp(-1j * fr * d / c) / d / 4 / np.pi
+
+
+def plain_gamma_freq(a, x, fs, N, mic_pos):
+    n_spikes = len(a)
+    M = len(mic_pos)
+
+    freq = np.fft.rfftfreq(N, 1/fs)*2*np.pi
+    N = len(freq)
+    J = M*N
+    res = np.zeros(J, dtype=complex)
+
+    for m in range(M):
+        for n in range(N):
+            j = N * m + n
+            for k in range(n_spikes):
+                res[j] += a[k] * gammaj_freq(freq[n], x[k], mic_pos[m])
+    return res
+
+
 def plain_gamma_norm2(a, x, fs, N, mic_pos, filt):
     n_spikes = len(a)
     M = len(mic_pos)
@@ -95,6 +117,33 @@ def plain_slide_jac(a, x, y, fs, N, mic_pos, filt, filt_der, lam):
         for m in range(M):
             for n in range(N):
                 main_term += gammaj_der(x[k], fs, n, mic_pos[m], filt, filt_der) * residue[m*N + n]
+        jac[K + 3*k: K + 3*(k+1)] = a[k] * main_term
+
+    return jac
+
+
+def gammaj_der_freq(x, posm, freq):
+    dist = np.linalg.norm(x - posm)
+    diff = x - posm
+    return - diff * (1/dist+1j*freq/c)*np.exp(-1j*freq*dist/c) / 4 / np.pi / dist**2
+
+
+def plain_slide_freq_jac(a, x, y, fs, N, mic_pos, lam):
+    K, M = len(a), len(mic_pos)
+    jac = np.zeros(4*K)
+    residue = plain_gamma_freq(a, x, fs, N, mic_pos) - y
+    freq = 2*np.pi*np.fft.rfftfreq(N, 1/fs)
+    N = len(freq)
+    for k in range(K):  # derivative in ak
+        for m in range(M):
+            for n in range(N):
+                jac[k] += np.real(gammaj_freq(freq[n], x[k], mic_pos[m]) * np.conj(residue[m*N + n]))
+        jac[k] += lam * np.sign(a[k])
+    for k in range(K):  # derivative in xk
+        main_term = np.zeros(3)
+        for m in range(M):
+            for n in range(N):
+                main_term += np.real(gammaj_der_freq(x[k], mic_pos[m], freq[n]) * np.conj(residue[m*N + n]))
         jac[K + 3*k: K + 3*(k+1)] = a[k] * main_term
 
     return jac
@@ -217,7 +266,7 @@ class TestGamma(unittest.TestCase):
         self.assertAlmostEqual(diff2, 0., places=12)
 
 
-class TestEta(unittest.TestCase):
+class TestTimeJac(unittest.TestCase):
     """Testing compliance to PRA simulations and to the plain written formula (with explicit loops)"""
     def setUp(self):
         self.mic_array = load_antenna("data/eigenmike32_cartesian.csv", mic_size=1.756)[:3]
@@ -229,22 +278,6 @@ class TestEta(unittest.TestCase):
         self.nsrc = 15
         self.ampl = np.random.random(self.nsrc) + 0.5
         self.src = np.random.random([self.nsrc, 3]) + 2.
-
-    def test_eta1(self):
-        """Testing compliance to PRA simulations"""
-
-        sfw = src.sfw.TimeDomainSFW(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
-
-        grid, sph_grid, n_per_sphere = create_grid_spherical(1.124, 3, 0.541, 47, 47, verbose=False)
-
-        # check that the vectorized code matches the explicit formula
-        for k in range(1, 7):
-            a, x = self.ampl[:k], self.src[:k, :]
-            res = sfw.y - sfw.gamma(a, x)
-            sfw.res = res
-            for r in grid:
-                self.assertAlmostEqual(sfw.etak(r.flatten()),
-                                       float(plain_eta(r, res, self.fs, self.N, self.mic_array, sfw.sinc_filt)))
 
     def test_jac_slide(self):
         sfw = src.sfw.TimeDomainSFW(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
@@ -340,28 +373,99 @@ class TestEta(unittest.TestCase):
                 self.assertAlmostEqual(sfw_jac[t], fd, places=3)
 
 
+class TestEta(unittest.TestCase):
+    """Testing compliance to PRA simulations and to the plain written formula (with explicit loops)"""
+    def setUp(self):
+        self.mic_array = load_antenna("data/eigenmike32_cartesian.csv", mic_size=1.756)[:3]
+        self.random_gen = np.random.RandomState()
+        self.random_gen.seed(42)
+        self.N = 100
+        self.fs = 14512
+        self.measurements = self.random_gen.random(self.N * self.mic_array.shape[0])
+        self.nsrc = 15
+        self.ampl = np.random.random(self.nsrc) + 0.5
+        self.src = np.random.random([self.nsrc, 3]) + 2.
+
+    def test_eta1(self):
+        """Testing compliance to PRA simulations"""
+
+        sfw = src.sfw.TimeDomainSFW(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
+
+        grid, sph_grid, n_per_sphere = create_grid_spherical(1.124, 3, 0.541, 47, 47, verbose=False)
+
+        # check that the vectorized code matches the explicit formula
+        for k in range(1, 7):
+            a, x = self.ampl[:k], self.src[:k, :]
+            res = sfw.y - sfw.gamma(a, x)
+            sfw.res = res
+            for r in grid:
+                self.assertAlmostEqual(sfw.etak(r.flatten()),
+                                       float(plain_eta(r, res, self.fs, self.N, self.mic_array, sfw.sinc_filt)))
+
+
 class TestGammaFreq(unittest.TestCase):
     """Testing compliance between the DFT of the ideal RIR and the ideal FT model"""
     def test_gamma1(self):
         """Testing compliance to PRA simulations"""
         mic_array1 = load_antenna("data/eigenmike32_cartesian.csv", mic_size=3.)
-        fs = 16000
+        fs = 32000
         origin = np.array([0.89, 1, 1.1])
 
         measurements1, N1, src1, ampl1, mic_array1, _ = simulate_rir(mic_array=mic_array1 + origin[np.newaxis, :],
                                                                      src_pos=[1, 2., 0.5], room_dim=[2, 3, 1.5], fs=fs,
                                                                      max_order=1, origin=origin)
         M = len(mic_array1)
-        sfw = src.sfw.TimeDomainSFW(y=(ampl1, src1), mic_pos=mic_array1, fs=16000, N=N1)
+        sfw = src.sfw.TimeDomainSFW(y=(ampl1, src1), mic_pos=mic_array1, fs=fs, N=N1)
 
-        fft = np.fft.rfft(sfw.y.reshape(M, N1), axis=-1).flatten() / np.sqrt(2*np.pi)
+        fft = np.fft.rfft(sfw.y.reshape(M, N1), axis=-1).flatten()
 
         freq_sfw = src.sfw.FrequencyDomainSFW(y=sfw.y, N=N1, mic_pos=mic_array1, fs=fs)
         model_ft = freq_sfw.gamma(ampl1, src1)
 
         # check that the vectorized code matches the PRA simulations
         diff = np.linalg.norm((fft - model_ft)[:-1])
-        self.assertLessEqual(diff, 0.2)
+
+        self.assertLessEqual(diff, 0.1)
+
+        # check that the vectorized code matches the plain written formula
+        plain_ft = plain_gamma_freq(ampl1, src1, fs, N1, mic_array1)
+        diff = np.linalg.norm(plain_ft - model_ft)
+        self.assertLessEqual(diff, 0.05)
+
+
+class TestFreqJac(unittest.TestCase):
+    """Testing compliance to PRA simulations and to the plain written formula (with explicit loops)"""
+    def setUp(self):
+        self.mic_array = load_antenna("data/eigenmike32_cartesian.csv", mic_size=1.876)[:3]
+        self.random_gen = np.random.RandomState()
+        self.random_gen.seed(42)
+        self.N = 100
+        self.fs = 14512
+        self.measurements = self.random_gen.random(self.N * self.mic_array.shape[0])
+        self.nsrc = 15
+        self.ampl = np.random.random(self.nsrc) + 0.5
+        self.src = np.random.random([self.nsrc, 3]) + 2.
+
+    def test_jac_slide(self):
+        sfw = src.sfw.FrequencyDomainSFW(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
+        sfw.nk = 5  # number of sources considered
+
+        # point used for comparison
+        var = np.arange(1, sfw.nk*4 + 1, dtype=float)
+
+        sfw_jac = sfw._jac_slide_obj(var, y=sfw.y, n_spikes=sfw.nk)
+        plain_jac = plain_slide_freq_jac(var[:sfw.nk], var[sfw.nk:].reshape(sfw.nk, 3),
+                                         y=sfw.y, fs=self.fs, N=self.N, mic_pos=sfw.mic_pos, lam=sfw.lam)
+        dt = 1e-6
+
+        for t in range(4*sfw.nk):
+            varm, varp = var.copy(), var.copy()
+            varp[t] += dt
+            fd = (sfw._obj_slide(varp, y=sfw.y, n_spikes=sfw.nk) - sfw._obj_slide(varm, y=sfw.y, n_spikes=sfw.nk)) / dt
+
+            self.assertAlmostEqual(sfw_jac[t], plain_jac[t])  # test compliance to plain written formula
+            self.assertAlmostEqual(sfw_jac[t], fd, places=3)  # test compliance to finite differences
+
 
 
 if __name__ == '__main__':

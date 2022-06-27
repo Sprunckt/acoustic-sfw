@@ -1157,7 +1157,8 @@ class FrequencyDomainSFW(SFW):
         self.freq_array = np.fft.rfftfreq(self.time_sfw.N, d=1. / self.fs)
         self.freq_mask = (self.freq_array >= self.obs_freq[0]) & (self.freq_array < self.obs_freq[1])
         self.freq_array = self.freq_array[self.freq_mask] * 2 * np.pi
-        self.J = self.M * len(self.freq_array)
+        self.Nfreq = len(self.freq_array)
+        self.J = self.M * self.Nfreq
 
     def _update_rir(self):
         """
@@ -1165,17 +1166,17 @@ class FrequencyDomainSFW(SFW):
         """
         self._update_freq()
 
-        # compute the FFT of the rir, divide by the normalization constant
+        # compute the FFT of the rir
         self.y = np.fft.rfft(self.time_sfw.y.reshape(self.M, self.time_sfw.N),
-                             axis=-1)[:, self.freq_mask].flatten() / np.sqrt(2 * np.pi)
+                             axis=-1)[:, self.freq_mask].flatten()
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
-        # sum(M, K, N_freq, axis=1)
+        # sum(M, K, N_freq, axis=1), no 1/fs factor in order to account for the DFT approximation
         return np.sum(np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
-                      / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis]
+                      / 4 / np.pi / dist[:, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
     def etak(self, x: np.ndarray) -> float:
@@ -1184,7 +1185,7 @@ class FrequencyDomainSFW(SFW):
 
         # shape (M, Nfreq) to (M*Nfreq,)
         gammaj = (np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
-                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis]).flatten()
+                  / 4 / np.pi / dist[:, np.newaxis]).flatten()
 
         return -np.sum(np.real(self.res * np.conj(gammaj)))
 
@@ -1219,7 +1220,7 @@ class FrequencyDomainSFW(SFW):
 
         # shape (M, N_freq, K) -> (J, K)
         gamma_mat_cpx = np.reshape(np.exp(-1j * self.freq_array[np.newaxis, :, np.newaxis] * dist[:, np.newaxis, :] / c)
-                                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis, :],
+                                   / 4 / np.pi / dist[:, np.newaxis, :],
                                    newshape=(self.J, -1))
 
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
@@ -1257,8 +1258,8 @@ class FrequencyDomainSFW(SFW):
         return search_grid
 
     def _get_normalized_fun(self):
-        normalized_eta_jac = "3-point"
-        slide_jac = None
+        normalized_eta_jac = self._jac_etak
+        slide_jac = self._jac_slide_obj
         return normalized_eta_jac, slide_jac
 
     def _obj_slide(self, var, y, n_spikes):
@@ -1268,6 +1269,48 @@ class FrequencyDomainSFW(SFW):
 
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
         return 0.5 * np.sum(np.abs(self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
+
+    def _jac_slide_obj(self, var, y, n_spikes):
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
+        diff = x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]  # difference, shape (M, K, 3)
+        # distances from the diracs contained in x to every microphone, shape (M,K), K=len(x)
+        dist = np.sqrt(np.sum(diff ** 2, axis=2))
+
+        jac = np.zeros(n_spikes * 4)
+
+        # shape (M, K, Nfreq)
+        gamma_tens = (np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis]/c)
+                      / dist[:, :, np.newaxis] / 4 / np.pi)
+
+        # gamma(a,x) - y = -res, shape (M,Nfreq)
+        residue_c = np.conj(np.einsum("mkn,k->mn", gamma_tens, a, optimize='greedy') - y.reshape(self.M, self.Nfreq))
+
+        # derivatives in a
+        jac[:n_spikes] = self.lam + np.sum(np.real(residue_c[:, np.newaxis, :]*gamma_tens), axis=(0, 2))
+
+        # real part in the gradient, shape (M, K, Nfreq)
+        real_part = -np.real((1/dist[:, :, np.newaxis] + 1j*self.freq_array[np.newaxis, np.newaxis, :] / c)*gamma_tens
+                             * residue_c[:, np.newaxis, :])
+
+        # derivatives in x, shape (M, K, 3, N_freq) -> (K, 3) flattened
+        jac[n_spikes:] = np.einsum("mkn,k,mkin->ki", real_part, a,
+                                   diff[:, :, :, np.newaxis]  # (M, K, 3) -> (M, K, 3, N_freq)
+                                   / dist[:, :, np.newaxis, np.newaxis], optimize='greedy').reshape(-1)
+
+        # sum(M, K, N_freq, axis=1)
+        return jac
+
+    def _jac_etak(self, x):
+        diff = x[np.newaxis, :] - self.mic_pos[:, :]  # difference, shape (M, 3)
+        # distances from in to every microphone, shape (M,)
+        dist = np.sqrt(np.sum(diff ** 2, axis=1))
+
+        # conjugate gradient of gamma_m without the (r-rm) factor, shape (M,Nfreq)
+        exp_conj = ((1/dist[:, np.newaxis] - 1j*self.freq_array[np.newaxis, :]/c)
+                    * (np.exp(1j*self.freq_array[np.newaxis, :]*dist[:, np.newaxis]/c)
+                    / 4 / np.pi / dist[:, np.newaxis]**2) * self.res.reshape([self.M, self.Nfreq]))
+
+        return np.sum(np.real(exp_conj[:, :, np.newaxis])*diff[:, np.newaxis, :], axis=(0, 1)).reshape(-1)
 
 
 class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
