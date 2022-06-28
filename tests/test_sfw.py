@@ -185,6 +185,17 @@ def plain_eta_jac(x, res, fs, N, mic_pos, filt, filt_der, lam):
     return -jac
 
 
+def plain_eta_jac_freq(x, fs, N, mic_pos, res):
+    M = len(mic_pos)
+    jac = np.zeros(3)
+    freq = 2*np.pi*np.fft.rfftfreq(N, 1/fs)
+    N = len(freq)
+    for m in range(M):
+        for n in range(N):
+            jac += np.real(gammaj_der_freq(x, mic_pos[m], freq[n]) * np.conj(res[m*N + n]))
+    return -jac
+
+
 def plain_eta_jac_norm2(x, res, fs, N, mic_pos, filt, filt_der, lam):
     M = len(mic_pos)
     jac = np.zeros(3)
@@ -466,6 +477,26 @@ class TestFreqJac(unittest.TestCase):
             self.assertAlmostEqual(sfw_jac[t], plain_jac[t])  # test compliance to plain written formula
             self.assertAlmostEqual(sfw_jac[t], fd, places=3)  # test compliance to finite differences
 
+    def test_jac_eta1(self):
+        """Test compliance to the plain written eta jacobian without normalization"""
+        sfw = src.sfw.FrequencyDomainSFW(y=self.measurements, mic_pos=self.mic_array, fs=self.fs, N=self.N)
+        sfw.nk = 5  # number of sources considered
+
+        # points used for comparison
+        lvar = [np.arange(1, 4, dtype=float), np.array([0.32102, -4.45, -1.3452]), np.array([-1.457, 10, 0.21])]
+        dt = 1e-8
+
+        for var in lvar:
+            sfw_jac = sfw._jac_etak(var)
+            plain_jac = plain_eta_jac_freq(var, res=sfw.y, fs=self.fs, N=self.N, mic_pos=sfw.mic_pos)
+
+            for t in range(3):
+                self.assertAlmostEqual(sfw_jac[t], plain_jac[t])
+                varp = var.copy()
+                varp[t] += dt
+                # test compliance to finite differences
+                fd = (sfw.etak(varp) - sfw.etak(var)) / dt
+                self.assertAlmostEqual(sfw_jac[t], fd, places=4)
 
 
 if __name__ == '__main__':

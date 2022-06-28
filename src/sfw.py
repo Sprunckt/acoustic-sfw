@@ -1317,18 +1317,18 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
     """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
 
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, fc=None, deletion_tol=5e-2):
-        y = FrequencyDomainSFW(y, N, mic_pos, fs, lam, fc, deletion_tol).time_sfw.y
-        super().__init__(y, N, mic_pos, fs, lam, fc, deletion_tol)
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
+        y = TimeDomainSFW(y, N=N, mic_pos=mic_pos, fs=fs, lam=lam, fc=fc, deletion_tol=deletion_tol).y
+        super().__init__(y=y, N=N, mic_pos=mic_pos, fs=fs, lam=lam,
+                         fc=fc, deletion_tol=deletion_tol, freq_range=freq_range)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
         dist = np.sqrt(np.sum((x[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # sum(M, K, N_freq, axis=1)
-        return np.sum(self.sinc_hat(self.freq_array[np.newaxis, np.newaxis, :])
-                      * np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
-                      / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, :, np.newaxis]
+        return np.sum(np.exp(-1j * self.freq_array[np.newaxis, np.newaxis, :] * dist[:, :, np.newaxis] / c)
+                      / 4 / np.pi / dist[:, :, np.newaxis]
                       / np.linalg.norm(1 / dist, axis=0)[np.newaxis, :, np.newaxis]
                       * a[np.newaxis, :, np.newaxis], axis=1).flatten()
 
@@ -1338,9 +1338,8 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
         dist = np.linalg.norm(x[np.newaxis, :] - self.mic_pos, axis=1)
 
         # shape (M, N) to (M*N,)
-        gammaj = (self.sinc_hat(self.freq_array[np.newaxis, :])
-                  * np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
-                  / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
+        gammaj = (np.exp(-1j * self.freq_array[np.newaxis, :] * dist[:, np.newaxis] / c)
+                  / 4 / np.pi / dist[:, np.newaxis] / np.linalg.norm(1 / dist)).flatten()
 
         return -np.abs(np.sum(self.res * np.conj(gammaj)))
 
@@ -1354,11 +1353,10 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
         dist = np.sqrt(np.sum((self.xkp[np.newaxis, :, :] - self.mic_pos[:, np.newaxis, :]) ** 2, axis=2))
 
         # shape (M, N_freq, K) -> (J, K)
-        gamma_mat_cpx = np.reshape(self.sinc_hat(self.freq_array[np.newaxis, :, np.newaxis])
-                                   * np.exp(
+        gamma_mat_cpx = np.reshape(np.exp(
             -1j * self.freq_array[np.newaxis, :, np.newaxis] * dist[:, np.newaxis, :] / c)
                                    / np.linalg.norm(1 / dist, axis=0)[np.newaxis, np.newaxis, :]
-                                   / 4 / np.pi / np.sqrt(2 * np.pi) / dist[:, np.newaxis, :],
+                                   / 4 / np.pi / dist[:, np.newaxis, :],
                                    newshape=(self.J, -1))
 
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
