@@ -80,6 +80,9 @@ if __name__ == "__main__":
     ms = meta_param_dict.get("mic_size")  # array size factor
     max_order = meta_param_dict["max_order"]  # maximum order of reflections used
 
+    # amplitude threshold for deleting the spikes
+    deletion_tol = meta_param_dict.get("deletion_tol", 0.05)
+
     # peak signal to noise ration for the decorrelated noise
     psnr = meta_param_dict.get("psnr")
 
@@ -144,11 +147,13 @@ if __name__ == "__main__":
         if domain is None:
             print("No domain provided, considering the time domain by default")
             domain = "time"
+        elif domain == "frequency":
+            domain = "frequential"
 
         sf_types = {"time": [TimeDomainSFW, TimeDomainSFWNorm1, TimeDomainSFWNorm2],
                     "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1], "time_epsilon":[EpsilonTimeDomainSFW]}
 
-        sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam)
+        sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam, deletion_tol=deletion_tol)
 
         if domain == "frequential":
             sfw_init_args["freq_range"] = meta_param_dict.get("freq_range")
