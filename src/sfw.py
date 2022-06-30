@@ -676,7 +676,7 @@ class TimeDomainSFW(SFW):
         self.swap_counter = -1  # number of full iterations since last extension
         self.swap_factor = 0.  # growth criterion on the residual norm to extend the RIR
         self.swap_frequency = 0  # number of iterations before extending the RIR
-        self.res_norm = self.cumulated_energy[-1]  # norm of the first RIR
+        self.res_norm = self.cumulated_energy[-1]  # mean total energy of the multichannel RIR
         self.old_norm = self.res_norm
         self.current_ind = 0  # index of the last cutting threshold used
         assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
@@ -771,9 +771,13 @@ class TimeDomainSFW(SFW):
         threshold_reached = curr_norm < thresh  # norm criterion
         max_iter_reached = self.swap_counter > self.swap_frequency
         if threshold_reached:
-            self._extend_rir("norm criterion reached: {} < {}".format(curr_norm, thresh), verbose=verbose)
+            can_extend = self._extend_rir("norm criterion reached: {} < {}".format(curr_norm, thresh), verbose=verbose)
         elif max_iter_reached:
-            self._extend_rir("max iteration reached", verbose=verbose)
+            can_extend = self._extend_rir("max iteration reached", verbose=verbose)
+        else:
+            can_extend = False
+
+        return can_extend
 
     def sinc_filt(self, t):
         """
@@ -1200,12 +1204,29 @@ class FrequencyDomainSFW(SFW):
         """Cut the RIR in time"""
         self.time_sfw._algorithm_start_callback(**args)
         self._update_rir()
-        self.res = self.compute_residue()
+        self.compute_residue()
+
+    def _iteration_start_callback(self, verbose=False):
+        self.time_sfw.ak, self.time_sfw.xk = self.ak[:], self.xk[:]
+
+        # set the views to be immutable (controls that the time_sfw object does not modify the spikes)
+        self.time_sfw.ak.setflags(write=False)
+        self.time_sfw.xk.setflags(write=False)
+
+        self.time_sfw.compute_residue()
+
+        # extend the time RIR if necessary
+        is_extended = self.time_sfw._iteration_start_callback(verbose)
+
+        if is_extended:  # in that case, update the frequency RIR
+            self._update_rir()
+            self.compute_residue()
 
     def _extend_rir(self, reason, verbose=False):
         can_extend = self.time_sfw._extend_rir(reason=reason, verbose=verbose)
         self._update_rir()
-        self.res = self.compute_residue()
+        self.compute_residue()
+
         return can_extend
 
     def _on_stop(self, verbose=False):
