@@ -163,6 +163,8 @@ if __name__ == "__main__":
                 print("epsilon must be provided")
                 exit(1)
             sfw_init_args["eps"] = eps
+        elif domain == "time":
+            pass
         else:
             sfw_init_args = {}
             print("invalid domain type")  # should not be reached
