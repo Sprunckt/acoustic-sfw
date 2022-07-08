@@ -902,6 +902,12 @@ class TimeDomainSFW(SFW):
         slide_jac = self._jac_slide_obj
         return normalized_eta_jac, slide_jac
 
+    def get_cut_ind(self):
+        return self.cut_ind
+
+    def update_mic_pos(self, new_pos):
+        self.mic_pos = new_pos
+
 
 class TimeDomainSFWNorm1(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
@@ -1333,6 +1339,13 @@ class FrequencyDomainSFW(SFW):
 
         return np.sum(np.real(exp_conj[:, :, np.newaxis])*diff[:, np.newaxis, :], axis=(0, 1)).reshape(-1)
 
+    def get_cut_ind(self):
+        return self.time_sfw.cut_ind
+
+    def update_mic_pos(self, new_pos):
+        self.mic_pos = new_pos
+        self.time_sfw.update_mic_pos(new_pos)
+
 
 class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
     """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
@@ -1390,3 +1403,76 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
 
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
+
+class DeconvolutionSFW(SFW):
+    """Blind spikes deconvolution. Does not work correctly with current initialization."""
+    def __init__(self, source_pos, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
+                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
+        self.mic_pos, self.M = mic_pos, len(mic_pos)
+
+        self.extract_ind = np.triu_indices(self.M, 1)
+        self.d = mic_pos.shape[1]
+        self.source_pos = source_pos.copy()
+        self.freq_sfw = FrequencyDomainSFW(y=y, N=N, mic_pos=mic_pos, fs=fs, fc=fc, freq_range=freq_range,
+                                           deletion_tol=deletion_tol)
+        self.Nfreq = self.freq_sfw.Nfreq
+
+        self.y = -self.gamma(np.array([1.]), self.source_pos.reshape([1, 3]))
+
+        super().__init__(y=self.y, fs=fs, lam=lam, N=self.freq_sfw.Nfreq, fc=fc, deletion_tol=deletion_tol)
+
+    def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
+        freq_response = self.freq_sfw.gamma(a, x).reshape([self.M, self.Nfreq])
+        # matrix containing the pairwise Hadamard products, shape (M, M, Nfreq)
+        mat = self.freq_sfw.y.reshape([self.M, self.Nfreq])[:, np.newaxis, :]*freq_response[np.newaxis, :, :]
+        mat = mat[self.extract_ind] - np.transpose(mat, (1, 0, 2))[self.extract_ind]  # extract the upper coefficients
+
+        return mat.reshape(-1)
+
+    def etak(self, x: np.ndarray) -> float:
+        return - np.sum(np.real(self.gamma(np.array([1.]), x.reshape([1, 3]))
+                                * np.conj(self.res)))
+
+    def _LASSO_step(self):
+        gamma_mat_cpx = np.array(
+            [self.gamma(np.ones(1), self.xkp[i, :].reshape([-1, self.d])) for i in range(self.nk)]).T
+        gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
+                                    np.imag(gamma_mat_cpx)], axis=0)
+        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        target_cpx = self.y
+        target = np.concatenate([np.real(target_cpx), np.imag(target_cpx)]).reshape(-1, 1)
+        scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
+        lasso_fitter.fit(scale * gamma_mat,
+                         scale * target)
+
+        return lasso_fitter, lasso_fitter.coef_.flatten()
+
+    def _get_normalized_fun(self):
+        return None, None
+
+    def _obj_slide(self, var, y, n_spikes):
+        """
+        Objective function for the sliding step, adapted for complex values
+        """
+        a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
+        return 0.5 * np.sum(np.abs(self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
+
+    def _algorithm_start_callback(self, **args):
+        self.freq_sfw._algorithm_start_callback(**args)
+
+    def _iteration_start_callback(self, verbose=False):
+        # append the source position to get the correct initialization, use copies of ak, xk
+        self.freq_sfw.ak = np.concatenate([self.ak[:], np.array([1.])])
+        self.freq_sfw.xk = np.concatenate([self.xk[:], self.source_pos])
+
+        self.freq_sfw._iteration_start_callback(verbose=verbose)
+
+    def _grid_initialization_function(self, parameters, verbose):
+        return self.freq_sfw._grid_initialization_function(parameters, verbose)
+
+    def get_cut_ind(self):
+        return self.freq_sfw.get_cut_ind()
+
+    def update_mic_pos(self, new_pos):
+        self.mic_pos = new_pos
+        self.freq_sfw.update_mic_pos(new_pos)

@@ -1,5 +1,5 @@
 from src.sfw import (TimeDomainSFW, FrequencyDomainSFW, EpsilonTimeDomainSFW, compute_time_sample, TimeDomainSFWNorm1,
-                     TimeDomainSFWNorm2, FrequencyDomainSFWNorm1)
+                     TimeDomainSFWNorm2, FrequencyDomainSFWNorm1, DeconvolutionSFW)
 import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
@@ -151,7 +151,8 @@ if __name__ == "__main__":
             domain = "frequential"
 
         sf_types = {"time": [TimeDomainSFW, TimeDomainSFWNorm1, TimeDomainSFWNorm2],
-                    "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1], "time_epsilon":[EpsilonTimeDomainSFW]}
+                    "deconvolution": [DeconvolutionSFW], "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1],
+                    "time_epsilon": [EpsilonTimeDomainSFW]}
 
         sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam, deletion_tol=deletion_tol)
 
@@ -165,6 +166,9 @@ if __name__ == "__main__":
             sfw_init_args["eps"] = eps
         elif domain == "time":
             pass
+        elif domain == "deconvolution":
+            sfw_init_args["freq_range"] = meta_param_dict.get("freq_range")
+            sfw_init_args["source_pos"] = src[orders == 0]
         else:
             sfw_init_args = {}
             print("invalid domain type")  # should not be reached
@@ -176,6 +180,8 @@ if __name__ == "__main__":
             s = sf_types[domain][normalization](y=(full_ampl, full_src), **sfw_init_args)
             if domain == "frequential":
                 measurements = s.time_sfw.y
+            elif domain == "deconvolution":
+                measurements = s.freq_sfw.time_sfw.y
             else:
                 measurements = s.y
         else:  # recreation using pyroom acoustics. The parameters are only taken from the room parameters file
@@ -243,9 +249,10 @@ if __name__ == "__main__":
             rot_walls = param_dict.get("rotation_walls")
         rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
         inv_rot_walls = rot_walls.inv()
-        s.mic_pos = mic_pos @ rot_walls.as_matrix()
-        if domain == "frequential":
-            s.time_sfw.mic_pos = mic_pos @ rot_walls.as_matrix()
+        s.update_mic_pos(mic_pos @ rot_walls.as_matrix())
+
+        if domain == "deconvolution":
+            s.source_pos = s.source_pos @ rot_walls.as_matrix()
 
         save_var = meta_param_dict.get("save_path")
         if save_var is not None:
@@ -263,16 +270,19 @@ if __name__ == "__main__":
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
-        s.mic_pos = s.mic_pos @ inv_rot_walls.as_matrix()
-        if domain == "frequential":
-            s.time_sfw.mic_pos = s.mic_pos
+        s.update_mic_pos(s.mic_pos @ inv_rot_walls.as_matrix())
 
-        if domain != "frequential":  # extend the RIR to the maximum length
-            s.NN = compute_time_sample(s.global_N, s.fs)
-            reconstr_rir = s.gamma(a, x)
-        else:
+        # extracting the results
+
+        if domain == "frequential":  # extend the RIR to the maximum length
             s.time_sfw.NN = compute_time_sample(s.time_sfw.global_N, s.fs)
             reconstr_rir = s.time_sfw.gamma(a, x)
+        elif domain == "deconvolution":
+            s.freq_sfw.time_sfw.NN = compute_time_sample(s.freq_sfw.time_sfw.global_N, s.fs)
+            reconstr_rir = s.freq_sfw.time_sfw.gamma(a, x)
+        else:
+            s.NN = compute_time_sample(s.global_N, s.fs)
+            reconstr_rir = s.gamma(a, x)
 
         ind, dist = compare_arrays(x, src)
         print("source matching and distances : \n", ind)
@@ -284,10 +294,8 @@ if __name__ == "__main__":
 
         if algo_start_cb is not None:
             if algo_start_cb.get("n_cut") is not None:
-                if domain == "frequential":
-                    dist_dic["cut_ind"] = s.time_sfw.cut_ind
-                else:
-                    dist_dic["cut_ind"] = s.cut_ind
+                dist_dic["cut_ind"] = s.get_cut_ind()
+
         # save the position of the microphones
         dist_dic["mic_array"] = s.mic_pos
 
