@@ -106,9 +106,14 @@ if __name__ == "__main__":
 
         rot = meta_param_dict.get("rotation_mic")
         if rot is not None:  # overwrite the default rotation
+            print("overwriting default microphone rotation")
             rot_mat = Rotation.from_euler("xyz", rot, degrees=True).as_matrix()
         else:
-            rot_mat = Rotation.from_euler("xyz", param_dict["rotation_mic"], degrees=True).as_matrix()
+            mic_rot = param_dict.get("rotation_mic")
+            if mic_rot is None:
+                print("no rotation applied to the antenna")
+                mic_rot = [0, 0, 0.]
+            rot_mat = Rotation.from_euler("xyz", mic_rot, degrees=True).as_matrix()
 
         use_two_antennas = meta_param_dict.get("use_two_antennas", False)
         if use_two_antennas:
@@ -247,6 +252,10 @@ if __name__ == "__main__":
         rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
         if rot_walls is None:  # using the rotation specific to the room
             rot_walls = param_dict.get("rotation_walls")
+            if rot_walls is None:
+                print("no rotation applied to the walls")
+                rot_walls = [0, 0, 0.]
+
         rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
         inv_rot_walls = rot_walls.inv()
         s.update_mic_pos(mic_pos @ rot_walls.as_matrix())
