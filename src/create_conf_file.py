@@ -1,11 +1,11 @@
 import os
 import json
 
-directory = "experiments/rdb1_10"
-sim_param = False  # if True create a conf file for random simulation, else a conf file for SFW experiments
+directory = "room_db"
+room_param = True  # if True create a conf file for random simulation, else a conf file for SFW experiments
 
 param_dict = dict()
-if sim_param:  # parameters for room generation
+if room_param:  # parameters for room generation
     # bounds for the room dimensions generation
     param_dict["xlim"] = [2, 10]
     param_dict["ylim"] = [2, 10]
