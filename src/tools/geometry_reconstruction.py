@@ -15,6 +15,62 @@ def same_half_space(x, y, normal, origin):
     return (np.dot(x, normal) - origin)*(np.dot(y, normal) - origin) > 0
 
 
+def generate_src_coordinates(d1, d2, lower_bound, upper_bound):
+    """Generate the coordinates of the image sources in one direction, given the distances of the source to the walls
+    and bounds (assume the origin is located at the source)."""
+    d = d1 + d2
+    coord_list = []
+    curr_coord, parity, k = 0, 1, 0
+    while curr_coord > lower_bound:
+        curr_coord = - 2*d*k - 2*parity*d2
+        if curr_coord > lower_bound:
+            coord_list.append(curr_coord)
+        k += 1*parity
+        parity = (parity + 1) % 2
+
+    curr_coord, parity, k = 0, 1, 0
+    while curr_coord < upper_bound:
+        curr_coord = 2*d*k + 2*parity*d1
+        if curr_coord < upper_bound:
+            coord_list.append(curr_coord)
+        k += 1*parity
+        parity = (parity + 1) % 2
+
+    return np.sort(coord_list)
+
+
+def image_source_score(image_pos, coord, penalization, tol):
+    is_close = np.abs(image_pos[:, np.newaxis] - coord[np.newaxis, :]) < tol
+    score = np.sum(is_close)
+    score -= penalization*np.sum(np.any(~is_close, axis=0))
+
+    return score
+
+
+def simplify_hist(hist, ind_sep, it_max=None, window_size=3):
+    """Extract bin spikes from an histogram array. Start by smoothing the histogram by applying a sliding window mean
+    around each bin. At each iteration k clear a space of width 2*ind_sep around the k greatest remaining value.
+    At the end the remaining array should not contain contiguous non-zero values."""
+
+    hist = np.convolve(hist, np.ones(window_size), mode='same')
+
+    if it_max is None:
+        it_max = np.inf
+    k, stat = 0, False
+    while k < it_max and not stat:
+        tmp = hist.copy()
+        ind_sort = np.argsort(hist)[-1-k]
+        max_val = hist[ind_sort]
+        tmp[np.maximum(ind_sort-ind_sep, 0):ind_sort+ind_sep] = 0
+        tmp[ind_sort] = max_val
+        if np.all(tmp == hist):
+            stat = True
+        else:
+            hist = tmp
+            k += 1
+    return hist
+
+
 def find_order1(image_pos):
     """
     Simple algorithm to find the order 1 image sources from a cloud of image sources, by sorting the sources by distance
@@ -107,11 +163,6 @@ def find_best_planes(source, image_pos, dphi, dtheta, thresh, nplanes=2, excl_ph
         acc[np.maximum(ind[0] - exclusion_length_theta, 0):ind[0] + exclusion_length_theta,
             ind[1] - exclusion_length_phi:ind[1] + exclusion_length_phi] = 0.
 
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        ims = ax.imshow(acc, extent=(0, np.pi, -np.pi / 2, np.pi / 2), origin='lower')
-        fig.colorbar(ims)
-        plt.show()
     res = [spherical_to_cartesian(1., el[0], el[1]) for el in res]
     if nplanes == 2:
         coord1, coord2 = res[:2]
@@ -149,6 +200,74 @@ def find_best_planes(source, image_pos, dphi, dtheta, thresh, nplanes=2, excl_ph
         print("plot not supported for nplanes != 2")
 
     return basis
+
+
+def pos_to_dim(full_image_pos, dx=0.02, sep=1., min_wall_dist=0.5, max_room_dim=15., plot=False):
+    """Return the clusters of coordinate-wise distances between the image sources (source included).
+    This assumes the coordinates are given in the referencial of the rectangular room (ie the basis vectors follow the
+    directions of the room walls. Two
+    distances are in the same cluster if they differ by less than 'thresh'."""
+
+    diffs = []
+    for i in range(3):
+        tmp = full_image_pos[:, np.newaxis, i] - full_image_pos[np.newaxis, :, i]
+        diffs.append(tmp[tmp > 0].flatten())
+
+    diffs = np.stack(diffs, axis=-1) / 2.
+    ind_sep = int(np.rint(sep / dx))  # minimum index separation between two spikes
+    thresh_factor = 2
+
+    bins = np.arange(min_wall_dist, max_room_dim + dx, dx)
+    dims, dists = np.zeros(3), np.zeros(3)
+    for i in range(3):
+        # compute the coordinate distance histogram
+        tmp, _ = np.histogram(diffs[:, i], bins=bins)
+
+        # delete the values under a relative threshold
+        thresh = np.max(tmp) / thresh_factor
+        tmp[tmp < thresh] = 0
+
+        # extract spikes
+        tmp = simplify_hist(tmp, ind_sep, it_max=None, window_size=3)
+
+        best_ind = np.sort(np.where(tmp > 0)[0])[:3]
+
+        d1, dd = bins[best_ind][:2]
+
+        is_pos = np.sum(np.abs(full_image_pos[:, i] - 2*d1) < dx) > np.sum(np.abs(full_image_pos[:, i] + 2*d1) < dx)
+
+        if is_pos:  # check if d1 is the distance to the wall with positive coordinate
+            # model where dd=d2
+            coord1 = generate_src_coordinates(d1, dd, lower_bound=np.min(full_image_pos[:, i]),
+                                              upper_bound=np.max(full_image_pos[:, i]))
+
+            # model where dd=dim (d1=d2)
+            coord2 = generate_src_coordinates(d1, dd - d1, lower_bound=np.min(full_image_pos[:, i]),
+                                              upper_bound=np.max(full_image_pos[:, i]))
+        else:
+            coord1 = generate_src_coordinates(dd, d1, lower_bound=np.min(full_image_pos[:, i]),
+                                              upper_bound=np.max(full_image_pos[:, i]))
+            coord2 = generate_src_coordinates(dd - d1, d1, lower_bound=np.min(full_image_pos[:, i]),
+                                              upper_bound=np.max(full_image_pos[:, i]))
+
+        # check which configuration is more likely
+        penalization = 1  # penalization factor of false negatives
+        best_model = np.argmax([image_source_score(full_image_pos[:, i], coord1, penalization=penalization, tol=dx),
+                                image_source_score(full_image_pos[:, i], coord2, penalization=penalization, tol=dx)])
+
+        dim = dd + d1 if (best_model == 0) else dd
+        if not is_pos:  # update d1 to be the distance to the wall of positive coordinate
+            d1 = dim - d1
+        dims[i] = (dim + dx / 2)   # thresh/2 offset relative to bin western edge
+        dists[i] = (d1 + dx / 2)
+
+    if plot:
+        fig, ax = plt.subplots(1, 3)
+        for i in range(3):
+            ax[i].hist(diffs[:, i], bins=bins)
+        plt.show()
+
+    return dims, dists
 
 
 if __name__ == "__main__":
