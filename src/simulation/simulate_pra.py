@@ -8,7 +8,7 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
     """Load the eigenmike32 spherical microphone array and dilate it by the factor mic_size
     Source: https://www.locata.lms.tf.fau.de/files/2020/01/Documentation_LOCATA_final_release_V1.pdf
     """
-    return np.genfromtxt(file_path, delimiter=', ') * mic_size
+    return np.genfromtxt(file_path, delimiter=',') * mic_size
 
 
 def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
@@ -81,6 +81,8 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
 
     else:
         dcutoff = -1
+        src, ampl = full_src.copy(), full_ampl.copy()
+
     # assemble the multichannel rir in a single array, N, M the number of time samples and microphones
     measurements, N, M = multichannel_rir_to_vec(room.rir, cutoff=dcutoff)
     measurements = measurements / 4 / np.pi  # rescaling factor
