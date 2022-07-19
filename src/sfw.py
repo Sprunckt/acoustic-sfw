@@ -75,6 +75,10 @@ class SFW(ABC):
         self.slide_control = 0  # control over the sliding step : 0 -> every iteration, 1 -> only at the end, 2 -> none
         self.y_freeze = self.y
 
+        # manage algorithm patience
+        self.patience = 1
+        self.patience_incr = 0
+
         # manage saves
         self.save, self.save_path = False, None
         self.saving_freq = 0
@@ -284,7 +288,7 @@ class SFW(ABC):
         self.old_xk[ind_active_mod] = self.xk[ind_active_mod]
         self.n_active = self.active_spikes.sum()
 
-    def _on_stop(self, verbose=False):
+    def _on_stop(self, reason=None, verbose=False):
         """Method called when a stopping criterion is met, should return True if the algorithm has to stop on the spot,
         False if it is allowed to go on through (for example if the RIR is not extended to its full length)."""
         return True
@@ -304,7 +308,7 @@ class SFW(ABC):
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
-                    slide_opt=None, saving_param=None) -> (np.ndarray, np.ndarray):
+                    slide_opt=None, saving_param=None, patience=1) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -354,6 +358,11 @@ class SFW(ABC):
             if not os.path.exists(os.path.dirname(self.save_path)):
                 print("{} does not exists".format(self.save_path))
                 exit(1)
+
+        assert patience >= 1, "invalid value for patience"
+        self.patience = patience
+        if patience > 1 and verbose:
+            print("Patience: {} iterations", patience)
 
         self.timer = time.time()
         self.eta_jac, self.slide_jac = self._get_normalized_fun()
@@ -405,10 +414,10 @@ class SFW(ABC):
 
         self._algorithm_start_callback(**algo_start_cb)
 
-        for i in range(niter):
+        while self.it < niter:
             self.it += 1
             if verbose:
-                print("iteration {}, residual norm : {}".format(i+1, self.res_norm))
+                print("iteration {}, residual norm : {}".format(self.it, self.res_norm))
 
             self._iteration_start_callback(**it_start_cb)
             # find argmax etak to get the new spike position (step 3)
@@ -494,7 +503,7 @@ class SFW(ABC):
             if use_hard_stop and etaval <= 1 + stop_tol:
                 if verbose:
                     print("Stopping criterion met : etak(x_new)={} < 1".format(etaval))
-                if self._on_stop():
+                if self._on_stop(reason='etak_stop', verbose=verbose):
                     return self._stop(verbose=verbose)
                 else:
                     self._it_end_cb()
@@ -522,8 +531,6 @@ class SFW(ABC):
 
             if self.slide_control > 0:
                 nit_slide, decreased_energy = 0, False
-                if verbose:
-                    print("Skipping the sliding step")
             else:
                 # sliding step : optimize to adjust both the positions and amplitudes
                 tmp_active = np.append(self.active_spikes, [True])
@@ -565,37 +572,35 @@ class SFW(ABC):
                         if verbose:
                             print("Energy increased, sliding not applied - retrying next iteration")
 
-            # deleting null amplitude spikes
+            # locating null amplitude spikes
             ind_null = np.asarray(np.abs(self.ak) < self.deletion_tol)
-            self.ak = self.ak[~ind_null]
-            self.xk = self.xk[~ind_null, :]
-            self.nk = len(self.ak)
+            nk_tmp = np.maximum(self.nk - ind_null.sum(), 0)
 
-            if self.freeze_step and self.nk > 0:  # update the frozen spikes history
-                self._append_history(self.ak[self.nk-1:], self.xk[self.nk-1].reshape(1, 3))
-                self._update_history(ind_null)  # if the new spike is null it is instantly deleted. todo: clean this
-                if verbose:
-                    print("active spikes : \n", np.where(self.active_spikes)[0])
-            else:  # all the spikes are active
-                self.active_spikes = np.ones(self.nk, dtype=bool)
-                self.n_active = self.nk
-
-            if self.nk == 0:
-                if self._on_stop(verbose=verbose):
+            if nk_tmp == 0:
+                self.ak, self.xk, self.nk = np.zeros(1), np.zeros((1, self.d)), 0
+                if self._on_stop(reason='all_null', verbose=verbose):
                     print("Error : all spikes are null, stopping")
                     return self._stop(verbose=verbose)
                 else:
                     self._it_end_cb()
                     continue
             # last spike is null and minor changes from the previous iteration at the sliding step
-            elif (early_stopping and (ind_null.sum() == 1 and ind_null[-1])
+            elif (early_stopping and ind_null[-1]
                   and (nit_slide == 1 or not decreased_energy)):
-                if self._on_stop(verbose=verbose):
+
+                if self._on_stop(reason='last_null', verbose=verbose):  # stopping
+                    self.ak, self.xk, self.nk = self.ak[~ind_null], self.xk[~ind_null, :], nk_tmp
                     print("Last spike has null amplitude, stopping")
                     return self._stop(verbose=verbose)
-                else:
+                else:  # pulling through, keep the null spikes
+                    if self.patience == 1:
+                        self.ak, self.xk, self.nk = self.ak[~ind_null], self.xk[~ind_null, :], nk_tmp
                     self._it_end_cb()
                     continue
+            else:  # no reason to stop, update spikes accordingly
+                self.ak, self.xk, self.nk = self.ak[~ind_null], self.xk[~ind_null, :], nk_tmp
+                # if this point is reached, patience can be reset
+                self.patience_incr = 0
 
             if spike_merging:
                 if verbose:
@@ -609,6 +614,15 @@ class SFW(ABC):
             if verbose:
                 print("New measure :")
                 disp_measure(self.ak, self.xk)
+
+            if self.freeze_step and self.nk > 0:  # update the frozen spikes history
+                self._append_history(self.ak[self.nk-1:], self.xk[self.nk-1].reshape(1, 3))
+                self._update_history(ind_null)  # if the new spike is null it is instantly deleted. todo: clean this
+                if verbose:
+                    print("active spikes : \n", np.where(self.active_spikes)[0])
+            else:  # all the spikes are active
+                self.active_spikes = np.ones(self.nk, dtype=bool)
+                self.n_active = self.nk
 
             # save if necessary and update residue
             self._it_end_cb()
@@ -778,10 +792,20 @@ class TimeDomainSFW(SFW):
         else:
             return False
 
-    def _on_stop(self, verbose=False):
+    def _on_stop(self, reason=None, verbose=False):
         """Should return False if the RIR can be extended (meaning the algorithm is allowed to pull through), True
         otherwise."""
-        return not self._extend_rir(reason="stopping criterion met", verbose=verbose)
+        should_stop = not self._extend_rir(reason="stopping criterion met", verbose=verbose)
+        if not should_stop:
+            return False
+        elif reason == 'last_null':  # check if patience is exhausted
+            self.patience_incr += 1
+            if self.patience_incr >= self.patience:
+                return True
+            elif verbose:  # go through, keep low amplitude spikes
+                print("exhausting patience : {}/{}".format(self.patience_incr, self.patience))
+        else:
+            return True
 
     def _iteration_start_callback(self, verbose=False):
         self.swap_counter += 1
