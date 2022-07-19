@@ -682,31 +682,49 @@ class TimeDomainSFW(SFW):
         assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
 
     def _algorithm_start_callback(self, verbose=False, n_cut=0, int_start=None,
-                                  swap_frequency=10, swap_factor=0.5):
+                                  swap_frequency=10, swap_factor=0.5, method='energy', min_dist=2.):
         """Parametrize the segmentation of the time interval.
         Args:-n_cut (int) : number of cutting thresholds (number of subintervals -1). Set to 0 to use the full RIR.
-        5 is a good default value.
-        -int_start (float) : starting value for the choice of the threshold (maximum value is the norm of the RIR),
-        default : norm/3
+        10 is a good default value for 60ms.
+        -method (str): 'energy': cut according to cumulative square sum
+                       'time': cut linearly the RIR, starting from the time needed to propagate through the distance
+        'min_dist' (ie min_dist/343).
+        -int_start (float) : starting value for the choice of the starting threshold in the energy method (maximum value
+         is the norm of the RIR), default : norm/3
         -swap_frequency (int) : maximum number of full iterations before extending to the next threshold"""
-        int_end = self.cumulated_energy[-1]  # vector norm of the first microphone RIR
-        if int_start is None:
-            int_start = int_end / 3.
-
-        cut_values = np.linspace(int_start, int_end, n_cut, endpoint=False)
 
         if n_cut > 0:
-            overshoot = int(self.fs * self.antenna_diameter / c)  # worst minimal time to go through the antenna
-            cut_ind = [np.argmax(self.cumulated_energy > cut_values[0]) + overshoot]
 
-            for i in range(1, n_cut):
-                # find the smallest time sample for which an energy threshold is reached (overshoot by a few samples)
-                new_ind = np.argmax(self.cumulated_energy > cut_values[i]) + overshoot
-                if new_ind - cut_ind[-1] > 50:  # only add the next index if there is a minimal time separation
-                    cut_ind.append(new_ind)
+            if method == 'energy':
+                cut_ind = []
+                int_end = self.cumulated_energy[-1]  # vector norm of the first microphone RIR
+                if int_start is None:
+                    int_start = int_end / 3.
 
-            cut_ind.append(self.global_N - 1)  # last index of the complete first microphone RIR
-            self.cut_ind = np.array(cut_ind)
+                cut_values = np.linspace(int_start, int_end, n_cut, endpoint=False)
+
+                overshoot = int(self.fs * self.antenna_diameter / c)  # worst minimal time to go through the antenna
+                cut_ind.append(np.argmax(self.cumulated_energy > cut_values[0]) + overshoot)
+
+                for i in range(1, n_cut):
+                    # find the smallest time sample for which an energy threshold is reached, overshoot by a few samples
+                    new_ind = np.argmax(self.cumulated_energy > cut_values[i]) + overshoot
+                    if new_ind - cut_ind[-1] > 50:  # only add the next index if there is a minimal time separation
+                        cut_ind.append(new_ind)
+                cut_ind.append(self.global_N - 1)  # last index of the complete first microphone RIR
+                self.cut_ind = np.array(cut_ind)
+
+            elif method == 'time':
+                # time sample corresponding to sound propagation over min_dist
+                ind_start = int(np.rint(self.fs*min_dist / c))
+                ind_end = self.global_N - 1
+                self.cut_ind = np.linspace(ind_start, ind_end, n_cut+2, endpoint=True, dtype=int)[1:]
+
+            else:
+
+                print("Segmenting method '{}' not recognized".format(method))
+                exit(1)
+
             if verbose:
                 print("Cutting the RIR according to {} thresholds".format(len(self.cut_ind) - 1))
                 print("Cutting samples : ", self.cut_ind)
