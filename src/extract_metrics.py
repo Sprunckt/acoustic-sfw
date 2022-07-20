@@ -4,8 +4,8 @@ Meant to be used as a script in command line.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from src.simulation.utils import (json_to_dict, correlation, unique_matches, compare_arrays,
-                                  great_circle_distance, radial_distance)
+from src.simulation.utils import (json_to_dict, correlation, unique_matches, compare_arrays)
+from src.tools.geometry_reconstruction import great_circle_distance, radial_distance
 import pandas as pd
 import os
 import sys
@@ -133,7 +133,7 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             elif distance == "spherical":
                 dist_rad = radial_distance(predicted_sources[inda], real_sources[indb])
                 dist_circle = great_circle_distance(predicted_sources[inda], real_sources[indb],
-                                                    rad=False, normalize=True)  # circle distance in degrees
+                                                    rad=False)  # circle distance in degrees
                 ind_tol = (dist_rad < tol[0]) & (dist_circle < tol[1])
             else:
                 ind_tol = None

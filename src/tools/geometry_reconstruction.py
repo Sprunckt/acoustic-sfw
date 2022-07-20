@@ -7,6 +7,33 @@ def spherical_to_cartesian(r, theta, phi):
     return np.array([r*np.cos(theta)*np.sin(phi), r*np.sin(theta)*np.sin(phi), r*np.cos(phi)])
 
 
+def cartesian_to_spherical(p):
+    p = p.reshape([-1, 3])
+    r = np.sqrt(p[:, 0]**2 + p[:, 1]**2 + p[:, 2]**2)
+    phi = np.arccos(p[:, 2] / r)  # elevation
+    theta = np.arctan2(p[:, 1], p[:, 0])
+    return np.stack([r, theta, phi], axis=1)
+
+
+def great_circle_distance(p1, p2, rad=True):
+    coord1, coord2 = cartesian_to_spherical(p1), cartesian_to_spherical(p2)
+    r1, theta1, phi1 = coord1[:, 0], coord1[:, 1], coord1[:, 2]
+    r2, theta2, phi2 = coord2[:, 0], coord2[:, 1], coord2[:, 2]
+    phi1, phi2 = np.pi/2 - phi1, np.pi/2 - phi2
+
+    res = 2*np.arcsin(0.5*np.sqrt((np.cos(phi2)*np.cos(theta2)-np.cos(phi1)*np.cos(theta1))**2 +
+                                  (np.cos(phi2)*np.sin(theta2) - np.cos(phi1)*np.sin(theta1))**2 +
+                                  (np.sin(phi2)-np.sin(phi1))**2))
+    if rad:
+        return res
+    else:
+        return res * 180./np.pi
+
+
+def radial_distance(p1, p2, axis=-1):
+    return np.abs(np.linalg.norm(p1, axis=axis)-np.linalg.norm(p2, axis=axis))
+
+
 def degrees_to_rad(alpha):
     return np.pi * alpha / 180
 
@@ -25,7 +52,7 @@ def generate_src_coordinates(d1, d2, lower_bound, upper_bound):
         curr_coord = - 2*d*k - 2*parity*d2
         if curr_coord > lower_bound:
             coord_list.append(curr_coord)
-        k += 1*parity
+        k += parity
         parity = (parity + 1) % 2
 
     curr_coord, parity, k = 0, 1, 0

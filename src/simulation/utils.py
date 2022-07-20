@@ -95,7 +95,7 @@ def create_grid(xmin, xmax, ymin, ymax, zmin, zmax, N, flat=True):
 
 
 def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.ndarray, np.ndarray, int):
-    """Create a grid using spherical coordinates. Adapted form Khaoula Chahdi.
+    """Create a grid using spherical coordinates. Adapted from Khaoula Chahdi.
     Args:
         -rmin, rmax (float) : boundaries for the radius
         -dr (float) : step for the radius
@@ -133,6 +133,53 @@ def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.nd
     n_per_sphere = n // n_r
 
     return grid, sph_grid, n_per_sphere
+
+
+def create_grid_spherical_multiple(rmin, nspheres, dr, dtheta, dphi, verbose=False) -> (np.ndarray, np.ndarray, int):
+    """Create a grid using spherical coordinates. Adapted from Khaoula Chahdi.
+    Args:
+        -rmin, rmax (float) : boundaries for the radius
+        -dr (float) : step for the radius
+        -dtheta, dphi (float) : steps for the angular coordinates, in degrees. dtheta will be rescaled in order to get a
+    uniform covering of each sphere
+    Return: a tuple (grid, sph_grid, n_per_sphere) where :
+        -grid : (n, 3) array containing the cartesian coordinates
+        -sph_grid : (n,3) array containing the spherical coordinates
+        -n_per_sphere (int) : number of points per sphere
+    """
+
+    dtheta_scaled = (dtheta * np.pi) / 180
+    n_theta = int(np.ceil(2 * np.pi / dtheta_scaled))
+    dphi_scaled = (dphi * np.pi) / 180
+    n_phi = int(np.ceil(np.pi / dphi_scaled) + 1)
+    # number of spheres
+    grid = []
+    sph_grid = []
+
+    phi_range, dphi = np.linspace(0, np.pi, n_phi, retstep=True)
+    phi_range2 = np.concatenate([[0.], phi_range + dphi/2])
+    phi_range2[-1] = np.pi
+
+    phi_ranges = [phi_range, phi_range2]
+    r_range = np.arange(-nspheres, nspheres + 1)*dr + rmin
+    for i, r in enumerate(r_range):
+        curr_range = phi_ranges[i % 2]
+        for phi in curr_range:
+            theta_range, dtheta = np.linspace(0, 2 * np.pi, int(np.ceil(n_theta * np.cos(phi - np.pi / 2))),
+                                              endpoint=False, retstep=True)
+
+            for theta in theta_range:
+                theta = theta+dtheta/(1+i%2)
+                x = r * np.cos(theta) * np.sin(phi)
+                y = r * np.sin(theta) * np.sin(phi)
+                z = r * np.cos(phi)
+                grid += [x, y, z]
+                sph_grid += [r, theta, phi]
+
+    grid = np.array(grid).reshape(-1, 3)
+    sph_grid = np.array(sph_grid).reshape(-1, 3)
+
+    return grid, sph_grid
 
 
 def disp_measure(a, x):
@@ -245,20 +292,3 @@ def save_results(res_path, rir_path, image_pos, ampl, reconstr_pos, reconstr_amp
     dict_to_json(exp_res, res_path)
     dict_to_json(rir_dict, rir_path)
 
-
-def great_circle_distance(p1, p2, rad=True, normalize=False, axis=-1):
-    if normalize:
-        r1 = np.linalg.norm(p1, axis=axis)[:, np.newaxis]
-        r2 = np.linalg.norm(p2, axis=axis)[:, np.newaxis]
-        tmp1, tmp2 = p1 / r1, p2 / r2
-    else:
-        tmp1, tmp2 = p1, p2
-    res = 2*np.arcsin(np.linalg.norm(tmp1 - tmp2, axis=axis)/2.)
-    if rad:
-        return res
-    else:
-        return res * 180./np.pi
-
-
-def radial_distance(p1, p2, axis=-1):
-    return np.abs(np.linalg.norm(p1, axis=axis)-np.linalg.norm(p2, axis=axis))

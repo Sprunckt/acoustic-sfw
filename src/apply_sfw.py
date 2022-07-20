@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 from src.simulation.utils import (create_grid_spherical, c, compare_arrays, save_results,
-                                  json_to_dict, correlation, unique_matches)
+                                  json_to_dict, correlation, unique_matches, create_grid_spherical_multiple)
 from src.tools.visualization import plot_room
 from src.simulation.simulate_pra import simulate_rir, load_antenna
 import os
@@ -82,6 +82,9 @@ if __name__ == "__main__":
 
     # amplitude threshold for deleting the spikes
     deletion_tol = meta_param_dict.get("deletion_tol", 0.05)
+
+    # patience for the reconstruction algorithm
+    patience = meta_param_dict.get("patience", 1)
 
     # peak signal to noise ration for the decorrelated noise
     psnr = meta_param_dict.get("psnr")
@@ -195,10 +198,15 @@ if __name__ == "__main__":
         # maximum reachable distance
         max_norm = c * N / meta_param_dict["fs"] + 0.5
         rmax = meta_param_dict.get("rmax", max_norm)
-
+        multiple_spheres = meta_param_dict.get("multiple_spheres", 0)
         scale_dphi = meta_param_dict.get("scale_dphi", False)
         if scale_dphi:
             grid = meta_param_dict["dphi"]
+        elif multiple_spheres > 0:
+            grid, sph_grid = create_grid_spherical_multiple(meta_param_dict["rmin"], multiple_spheres,
+                                                            meta_param_dict["dr"],
+                                                            meta_param_dict["dphi"], meta_param_dict["dphi"])
+
         else:
             grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
                                                           meta_param_dict["dphi"], meta_param_dict["dphi"])
@@ -275,7 +283,7 @@ if __name__ == "__main__":
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              slide_opt=slide_opt, spike_merging=False,
                              spherical_search=spherical_search, use_hard_stop=True, verbose=True, search_method="rough",
-                             early_stopping=True, plot=False, saving_param=save_var)
+                             early_stopping=True, plot=False, saving_param=save_var, patience=patience)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
