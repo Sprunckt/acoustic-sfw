@@ -12,7 +12,7 @@ def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
 
 
 def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
-                 origin=None, absorptions=None, save=None, verbose=False, return_full=False, max_src=3000):
+                 origin=None, absorptions=None, save=None, verbose=False, return_full=False, max_src=5000):
     """Simulate a RIR using pyroomacoustics, using the parameters given in a .json configuration file/dictionary of
     parameters.
     The configuration file must contain the following fields :
@@ -71,9 +71,14 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
 
         # compute the distances between the sources (n_sources, 3) and microphones (M, 3), shape (M, n_src)
         dist = np.sqrt(np.sum((full_src[np.newaxis, :, :] - mic_array[:, np.newaxis, :]) ** 2, axis=2))
-        # find the sources that are at a distance at most max_dist of at least one microphone (shape n_src)
-        remaining_src_ind = np.any(dist < max_dist, axis=0)
+        # find the sources that are at a distance at most max_dist of every microphone (shape n_src)
+        remaining_src_ind = np.all(dist < max_dist, axis=0)
         src, ampl, orders = full_src[remaining_src_ind, :], full_ampl[remaining_src_ind], orders[remaining_src_ind]
+
+        nb_src = np.sum(remaining_src_ind)
+        if max_src <= nb_src:
+            print("max_src threshold too low")
+            max_src = nb_src
 
         if return_full:
             dist_sorted_ind = np.argsort(dist[0])  # indices of the sorted distances to the first microphone

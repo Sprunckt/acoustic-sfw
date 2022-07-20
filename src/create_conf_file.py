@@ -1,7 +1,7 @@
 import os
-import json
+from src.simulation.utils import dict_to_json, json_to_dict
 
-directory = "room_db"
+directory = "room_db_full"
 room_param = True  # if True create a conf file for random simulation, else a conf file for SFW experiments
 
 param_dict = dict()
@@ -17,8 +17,12 @@ if room_param:  # parameters for room generation
     param_dict["mic_wall_sep"] = 1.
 
     # additional constraint to set the antenna and source altitudes (set to None to keep random)
-    param_dict["z_src"] = 1.
-    param_dict["z_mic"] = 1.
+    param_dict["z_src"] = None
+    param_dict["z_mic"] = None
+
+    # minimal and maximal absorptions
+    param_dict["min_abs"] = 0.01
+    param_dict["max_abs"] = 0.3
 
 else:  # parameters to configure SFW and the simulations
     param_dict["max_order"] = 1
@@ -41,12 +45,10 @@ else:  # parameters to configure SFW and the simulations
 
 param_path = os.path.join(directory, "parameters.json")
 if not os.path.exists(param_path):
-    fd = open(param_path, 'w')
-    json.dump(param_dict, fp=fd)
-    fd.close()
+    dict_to_json(param_dict, param_path)
+
 else:  # check if the parameters match the conf file
-    fd = open(param_path, 'r')
-    param_dict2 = json.load(fd)
+    param_dict2 = json_to_dict(param_path, list_to_array=False)
     mod = False
     for key in param_dict:
         if param_dict[key] != param_dict2[key]:
@@ -55,4 +57,6 @@ else:  # check if the parameters match the conf file
 
     if not mod:
         print("The configuration file for experiment {} exists and matches the given parameters".format(directory))
-    fd.close()
+    else:
+        dict_to_json(param_dict, param_path)
+
