@@ -39,12 +39,12 @@ def extract_subdirectories(pth):
 
 
 def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
-                unique=True, distance="cartesian"):
-    if tol is None:
+                unique=True, distance="cartesian", metrics_path=None, return_paths=False):
+    if tol is None:  # setting default tolerance depending on the distance type
         if distance == 'cartesian':
             tol = 5e-2
         elif distance == 'spherical':
-            tol = [2e-2, 25]
+            tol = [1e-2, 12]
 
     assert distance in ['spherical', 'cartesian'], "invalid distance type"
     if distance == 'spherical':
@@ -58,14 +58,17 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
     for path in path_list:  # loop over every directory
         n_res = count_results(path)
 
-        col = ["exp_id", "nb_found", "nb_recov", "ampl_corr", "ampl_rel_error"]
+        col = ["exp_id", "nb_src", "nb_found", "nb_recov", "recall", "precision", "ampl_corr", "ampl_rel_error"]
+        types = [int, int, int, int, float, float, float, float, float]
+
         if distance == "cartesian":
             col.append("mean_recov_dist")
         elif distance == "spherical":
             col.append("mean_recov_radial_dist")
             col.append("mean_recov_angular_dist")
+            types.append(float)
 
-        exp_df = pd.DataFrame(columns=col)
+        exp_df = pd.DataFrame(columns=col).astype({col[i]: types[i] for i in range(len(col))})
 
         thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
         tp, fp, fn = 0, 0, 0
@@ -146,6 +149,7 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
             # number of distinct recovered sources
             ctp = ind_tol.sum()
+            n_src = len(real_sources)  # expected number of sources
 
             tp += ctp  # positions correctly guessed
             fp += nb_found - ctp  # positions incorrectly guessed
@@ -158,8 +162,8 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 global_fp += nb_found - complete_ctp  # positions incorrectly guessed
                 global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
 
-            entry = dict(exp_id=i, nb_found=nb_found, nb_recov=ctp,
-                         ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
+            entry = dict(exp_id=i, nb_src=n_src, nb_found=nb_found, nb_recov=ctp, recall=ctp/n_src,
+                         precision=ctp/nb_found, ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
 
             if distance == 'cartesian':
                 # mean distance to real sources for the best recovered sources
@@ -183,7 +187,12 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 plt.show()
             else:
                 plt.clf()
-        exp_df.to_csv(os.path.join(path, "metrics_{}.csv".format(tol)), index=False)
+
+        if metrics_path is not None:
+            exp_df.to_csv(os.path.join(metrics_path, "{}_metrics_{}.csv".format(os.path.split(path)[-1], tol)),
+                          index=False)
+        else:
+            exp_df.to_csv(os.path.join(path, "metrics_{}.csv".format(tol)), index=False)
 
         entry = dict(exp_id=path, TP=tp, FN=fn, FP=fp,
                      precision=tp/(tp+fp), recall=tp/(tp+fn))
@@ -195,7 +204,11 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             os.mkdir(save_path)
 
         df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
-    return df
+
+    if return_paths:
+        return df, path_list
+    else:
+        return df
 
 
 if __name__ == "__main__":
@@ -203,10 +216,11 @@ if __name__ == "__main__":
     try:
         paths_d = sys.argv[1].split(",")
         opts, args = getopt.getopt(sys.argv[2:], 'su', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
-                                                       'n_src='])
+                                                        'n_src=', 'metrics_path='])
 
     except getopt.GetoptError:
-        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] [-is] \n"
+        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] [--metrics_path]"
+              "[--delimiter] [-su] \n"
               "path : path to a directory or several paths separated by commas \n"
               "--tol= : absolute tolerance \n"
               "--method= : method used to identify which true sources to consider. Available methods : \n"
@@ -216,6 +230,8 @@ if __name__ == "__main__":
               "argument. \n"
               "   -orderinf : extract all the image sources for which the order is inferior to the order specified by "
               "the n_src argument.\n"
+              "--metrics_path= : custom path to save the csv containing the computed metrics per experiment (by default"
+              "saves to the experiment folder \n"
               "--delimiter= : delimiting threshold for the distance method : only consider the true sources that are at"
               "a distance inferior or equal to 'delimiter'. Same behavior for the predicted sources, with a maximal"
               "distance of 'delimiter' + tol.\n"
@@ -230,12 +246,14 @@ if __name__ == "__main__":
               "-s : show the plots after saving")
         sys.exit(1)
 
-    save_path_d = "."
+    save_path_d, metrics_path_d = ".", None
     n_plot_d, show_d, method_d, delimiter_d = 0, False, "distance", np.inf
     tol_d, n_src_d, unique_d = 1e-2, 0, True
     for opt, arg in opts:
         if opt == '--save_path':
             save_path_d = arg
+        if opt == '--metrics_path':
+            metrics_path_d = arg
         elif opt == '--tol':
             tol_d = float(arg)
         elif opt == '--n_src':
@@ -251,4 +269,5 @@ if __name__ == "__main__":
         elif opt == '-u':
             unique_d = False
 
-    get_metrics(paths_d, save_path_d, n_plot_d, show_d, method_d, delimiter_d, tol_d, n_src_d, unique=unique_d)
+    get_metrics(paths_d, save_path_d, n_plot_d, show_d, method_d, delimiter_d, tol_d, n_src_d,
+                unique=unique_d, metrics_path=metrics_path_d)
