@@ -43,6 +43,13 @@ def get_id():
     return idd
 
 
+def choose_random(lb, ub, fixed=None):
+    if fixed is None:
+        return np.random.uniform(lb, ub)
+    else:
+        return fixed
+
+
 conf_path = os.path.join(directory, "parameters.json")
 if not os.path.exists(conf_path):
     print("Error : the conf file must be created first.")
@@ -69,32 +76,28 @@ while new_exp > n_generated:
     max_order = 1
 
     xroom, yroom, zroom = room_dim
-    # placing the source randomly
+    # check if the source or microphone altitudes are preset
     z_src = param_dict.get("z_src")
-
-    if z_src is None:  # if the parameter is not set, choose a random altitude
-        z_src = np.random.uniform(param_dict["mic_wall_sep"], zroom - param_dict["mic_wall_sep"])
-
-    src_pos = np.array([np.random.uniform(param_dict["mic_wall_sep"], xroom - param_dict["mic_wall_sep"]),
-                        np.random.uniform(param_dict["mic_wall_sep"], yroom - param_dict["mic_wall_sep"]),
-                        z_src])
-
-    mic_pos = src_pos.copy()
-
-    # placing the microphone antenna
     z_mic = param_dict.get("z_mic")
-    fixed_z = z_mic is not None
 
-    k = 0
-    while np.linalg.norm(src_pos - mic_pos) < param_dict["mic_src_sep"] and k < 1000:
-        z = z_mic if fixed_z else np.random.uniform(param_dict["mic_wall_sep"], zroom - param_dict["mic_wall_sep"])
+    # lower and upper bounds for the random coordinates
+    lb = param_dict["mic_wall_sep"]
+    ub = (xroom - param_dict["mic_wall_sep"], yroom - param_dict["mic_wall_sep"], zroom - param_dict["mic_wall_sep"])
+    fixed_src, fixed_mic = [None, None, z_src], [None, None, z_mic]
+    args_src = [(lb, ub[i], fixed_src[i]) for i in range(3)]
+    args_mic = [(lb, ub[i], fixed_mic[i]) for i in range(3)]
 
-        mic_pos = np.array([np.random.uniform(param_dict["mic_wall_sep"], xroom - param_dict["mic_wall_sep"]),
-                            np.random.uniform(param_dict["mic_wall_sep"], yroom - param_dict["mic_wall_sep"]),
-                            z])
+    src_pos = np.array([choose_random(*args_src[i]) for i in range(3)])
+    mic_pos = np.array([choose_random(*args_mic[i]) for i in range(3)])
+
+    k, max_reject = 0, 100000
+    while np.linalg.norm(src_pos - mic_pos) < param_dict["mic_src_sep"] and k < max_reject:
+        src_pos = np.array([choose_random(*args_src[i]) for i in range(3)])
+        mic_pos = np.array([choose_random(*args_mic[i]) for i in range(3)])
+
         k += 1
 
-    if k == 1000:
+    if k == max_reject:
         print("Error : failed to place the antenna")
         n_generated -= 1
     else:

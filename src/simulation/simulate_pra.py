@@ -94,12 +94,13 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
     if origin is not None:
         origin = np.array(origin).reshape(1, 3)
         src -= origin
-        mic_array -= origin
+        mic_array_cp = mic_array - origin
         if return_full:
             full_src -= origin
-
+    else:
+        mic_array_cp = mic_array.copy()
     if type(save) == str:
-        res = dict(mic_array=array_to_list(mic_array), image_pos=array_to_list(src),
+        res = dict(mic_array=array_to_list(mic_array_cp), image_pos=array_to_list(src),
                    ampl=array_to_list(ampl), N=N, rir=array_to_list(measurements))
 
         if origin is not None:
@@ -109,7 +110,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         fd.close()
 
     if return_full:
-        return measurements, N, src, ampl, mic_array, orders, full_src, full_ampl
+        return measurements, N, src, ampl, mic_array_cp, orders, full_src, full_ampl
     else:
-        return measurements, N, src, ampl, mic_array, orders
+        return measurements, N, src, ampl, mic_array_cp, orders
 
