@@ -15,19 +15,20 @@ def cartesian_to_spherical(p):
     return np.stack([r, theta, phi], axis=1)
 
 
-def great_circle_distance(p1, p2, rad=True):
-    coord1, coord2 = cartesian_to_spherical(p1), cartesian_to_spherical(p2)
-    r1, theta1, phi1 = coord1[:, 0], coord1[:, 1], coord1[:, 2]
-    r2, theta2, phi2 = coord2[:, 0], coord2[:, 1], coord2[:, 2]
-    phi1, phi2 = np.pi/2 - phi1, np.pi/2 - phi2
+def spherical_distance_to_cartesian(ang_dist, radial_dist, radius, rad=True):
+    if not rad:
+        ang_dist = ang_dist*np.pi / 180
+    r1, r2 = radius, radius + radial_dist
+    return np.sqrt((r1 - r2*np.abs(np.cos(ang_dist)))**2 + r2**2*np.sin(ang_dist)**2)
 
-    res = 2*np.arcsin(0.5*np.sqrt((np.cos(phi2)*np.cos(theta2)-np.cos(phi1)*np.cos(theta1))**2 +
-                                  (np.cos(phi2)*np.sin(theta2) - np.cos(phi1)*np.sin(theta1))**2 +
-                                  (np.sin(phi2)-np.sin(phi1))**2))
+
+def great_circle_distance(p1, p2, rad=True):
+    tmp1, tmp2 = p1 / np.linalg.norm(p1, axis=-1)[:, np.newaxis], p2 / np.linalg.norm(p2, axis=-1)[:, np.newaxis]
+    ang = np.arccos(np.sum(tmp1 * tmp2, axis=-1))
     if rad:
-        return res
+        return ang
     else:
-        return res * 180./np.pi
+        return ang * 180. / np.pi
 
 
 def radial_distance(p1, p2, axis=-1):

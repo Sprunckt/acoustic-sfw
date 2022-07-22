@@ -362,7 +362,7 @@ class SFW(ABC):
         assert patience >= 1, "invalid value for patience"
         self.patience = patience
         if patience > 1 and verbose:
-            print("Patience: {} iterations", patience)
+            print("Patience: {} iterations".format(patience))
 
         self.timer = time.time()
         self.eta_jac, self.slide_jac = self._get_normalized_fun()
