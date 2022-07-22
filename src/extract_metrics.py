@@ -39,14 +39,23 @@ def extract_subdirectories(pth):
 
 
 def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
-                unique=True, distance="cartesian", metrics_path=None, return_paths=False):
+                max_norm=None, unique=True, distance="cartesian", reconstr_ampl_threshold=None, metrics_path=None,
+                return_paths=False):
+
+    assert distance in ['spherical', 'cartesian'], "invalid distance type"
+
     if tol is None:  # setting default tolerance depending on the distance type
         if distance == 'cartesian':
             tol = 5e-2
         elif distance == 'spherical':
             tol = [1e-2, 12]
+    else:
+        if type(tol) == str:
+            if distance == 'cartesian':
+                tol = float(tol)
+            else:
+                tol = [float(a) for a in tol.split(',')]
 
-    assert distance in ['spherical', 'cartesian'], "invalid distance type"
     if distance == 'spherical':
         assert len(tol) == 2, 'tol should be a list containing the radial and angular thresholds'
 
@@ -88,6 +97,11 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
             orders = res_dict["orders"]
 
+            if reconstr_ampl_threshold is not None:
+                ind_considered = reconstr_ampl >= reconstr_ampl_threshold
+                reconstr_ampl = reconstr_ampl[ind_considered]
+                predicted_sources = predicted_sources[ind_considered]
+
             # only consider n_src sources, or every source if n_src = 0
             if method == "amplitude":  # sort according to amplitudes
                 sort_ind = np.argsort(real_ampl)
@@ -101,6 +115,7 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                                             - mic_array[:, np.newaxis, :]) ** 2, axis=2))
                 # find the sources that are at a distance at most 'delimiter' of at least one microphone
                 remaining_src_ind = np.any(real_dist < delimiter, axis=0)
+
                 # compute the minimal distance to the array
                 real_dist = np.min(real_dist[:, remaining_src_ind], axis=0)
                 sort_ind = np.argsort(real_dist)  # sort according to distance
@@ -118,11 +133,16 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             elif method == "orderinf":  # extract all the sources of an order inferior to the given order
                 source_index = orders <= n_src
                 real_sources, real_ampl = real_sources[source_index, :], real_ampl[source_index]
+                orders = orders[source_index]
             else:
                 print("method option not recognized. \n"
                       "method should be in ['amplitude', 'order', 'distance']")
                 exit(1)
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
+
+            if max_norm is not None:
+                norm_ind = np.linalg.norm(real_sources, axis=-1) <= max_norm
+                real_sources, real_ampl = real_sources[norm_ind], real_ampl[norm_ind]
 
             if unique:
                 # unique matches, looking only at the True positives at minimum distance
@@ -149,7 +169,7 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
             relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
             # number of distinct recovered sources
             ctp = ind_tol.sum()
-            n_src = len(real_sources)  # expected number of sources
+            nb_real = len(real_sources)  # expected number of sources
 
             tp += ctp  # positions correctly guessed
             fp += nb_found - ctp  # positions incorrectly guessed
@@ -162,13 +182,13 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 global_fp += nb_found - complete_ctp  # positions incorrectly guessed
                 global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
 
-            entry = dict(exp_id=i, nb_src=n_src, nb_found=nb_found, nb_recov=ctp, recall=ctp/n_src,
+            entry = dict(exp_id=i, nb_src=nb_real, nb_found=nb_found, nb_recov=ctp, recall=ctp/nb_real,
                          precision=ctp/nb_found, ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
 
             if distance == 'cartesian':
                 # mean distance to real sources for the best recovered sources
                 entry["mean_recov_dist"] = dist[ind_tol].mean()
-            elif distance == 'spherical:':
+            elif distance == 'spherical':
                 entry["mean_recov_radial_dist"] = dist_rad[ind_tol].mean()
                 entry["mean_recov_angular_dist"] = dist_circle[ind_tol].mean()
 
@@ -211,16 +231,65 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
         return df
 
 
+def get_slices(df, col, slice_edges):
+    nslices = len(slice_edges) - 1
+    slices_indices = [[] for _ in range(nslices)]
+
+    for i in range(nslices):
+        slices_indices[i] = df.exp_id.loc[(slice_edges[i] <= df[col]) & (df[col] < slice_edges[i+1])]
+
+    return slices_indices
+
+
+def get_metrics_per_slice(df, slices, slice_edges):
+    """Return a DataFrame where every metric is computed per slice (each row is a slice)"""
+    nslices = len(slices)
+    row_id = ["{}-{}".format(slice_edges[i], slice_edges[i+1]) for i in range(nslices)]
+    mean_df = pd.DataFrame(columns=df.columns)
+    mean_df = mean_df.astype(df.dtypes)
+    mean_df.rename(columns={'exp_id': 'range', 'ampl_corr': 'mean_ampl_corr'}, inplace=True)
+    if 'mean_recov_dist' in df.columns:
+        distance = 'cartesian'
+    elif 'mean_recov_radial_dist' in df.columns:
+        distance = 'spherical'
+    else:
+        distance = None
+        print("Error : missing mean distance column")
+        exit(1)
+
+    for i in range(nslices):
+        sub_df = df.loc[df.exp_id.isin(slices[i])]  # check
+        nb_src, nb_found, nb_recov = sub_df.nb_src.sum(), sub_df.nb_found.sum(), sub_df.nb_recov.sum()
+        precision, recall = nb_recov / nb_found, nb_recov / nb_src
+
+        entry = dict(nb_src=nb_src, nb_found=nb_found, nb_recov=nb_recov)
+
+        # multiply by nb_recov to get slice mean
+        if distance == 'cartesian':
+            entry['recov_dist'] = (sub_df.nb_recov * sub_df.mean_recov_dist).sum() / nb_recov
+        else:
+            entry['mean_recov_radial_dist'] = (sub_df.nb_recov * sub_df.mean_recov_radial_dist).sum() / nb_recov
+            entry['mean_recov_angular_dist'] = (sub_df.nb_recov * sub_df.mean_recov_angular_dist).sum() / nb_recov
+
+        entry['mean_ampl_corr'] = sub_df.ampl_corr.mean()
+        entry['ampl_rel_error'] = (sub_df.nb_recov * sub_df.ampl_rel_error).sum() / nb_recov
+        entry['range'] = row_id[i]
+        entry['recall'], entry['precision'] = recall, precision
+        mean_df = mean_df.append(entry, ignore_index=True)
+
+    return mean_df
+
+
 if __name__ == "__main__":
 
     try:
         paths_d = sys.argv[1].split(",")
         opts, args = getopt.getopt(sys.argv[2:], 'su', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
-                                                        'n_src=', 'metrics_path='])
+                                                        'n_src=', 'metrics_path=', 'ampl_thresh=', 'distance='])
 
     except getopt.GetoptError:
         print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] [--metrics_path]"
-              "[--delimiter] [-su] \n"
+              "[--delimiter] [--ampl_thresh=] [--distance=] [-su] \n"
               "path : path to a directory or several paths separated by commas \n"
               "--tol= : absolute tolerance \n"
               "--method= : method used to identify which true sources to consider. Available methods : \n"
@@ -238,6 +307,8 @@ if __name__ == "__main__":
               "--n_src : number of sources considered for the reconstruction. If not specified, all the theoretical"
               "sources recoverable for the given method and delimiter are considered. If method == order, n_src refers"
               "to the image source order considered.\n"
+              "--ampl_thresh= : ignores all reconstructed sources for which the amplitude is below the given "
+              "threshold\n"
               "--n_plot= : number of data points for a recall/precision curve in function "
               "of the tolerance threshold \n"
               "-u : allow to count the True positives multiple times for a given source. If two reconstructed sources"
@@ -249,13 +320,14 @@ if __name__ == "__main__":
     save_path_d, metrics_path_d = ".", None
     n_plot_d, show_d, method_d, delimiter_d = 0, False, "distance", np.inf
     tol_d, n_src_d, unique_d = 1e-2, 0, True
+    ampl_thresh_d, dist_d = None, 'cartesian'
     for opt, arg in opts:
         if opt == '--save_path':
             save_path_d = arg
         if opt == '--metrics_path':
             metrics_path_d = arg
         elif opt == '--tol':
-            tol_d = float(arg)
+            tol_d = arg
         elif opt == '--n_src':
             n_src_d = int(arg)
         elif opt == '--n_plot':
@@ -264,10 +336,15 @@ if __name__ == "__main__":
             method_d = arg
         elif opt == '--delimiter':
             delimiter_d = float(arg)
+        elif opt == '--ampl_thresh':
+            ampl_thresh_d = float(arg)
+        elif opt == '--distance':
+            dist_d = arg
         elif opt == '-s':
             show_d = True
         elif opt == '-u':
             unique_d = False
 
-    get_metrics(paths_d, save_path_d, n_plot_d, show_d, method_d, delimiter_d, tol_d, n_src_d,
-                unique=unique_d, metrics_path=metrics_path_d)
+    get_metrics(paths_d, save_path=save_path_d, n_plot=n_plot_d, show=show_d, method=method_d, delimiter=delimiter_d,
+                tol=tol_d, n_src=n_src_d, unique=unique_d, reconstr_ampl_threshold=ampl_thresh_d,
+                metrics_path=metrics_path_d, distance=dist_d)
