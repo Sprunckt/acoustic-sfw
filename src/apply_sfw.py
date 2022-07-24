@@ -207,12 +207,14 @@ if __name__ == "__main__":
         if scale_dphi:
             grid = meta_param_dict["dphi"]
         elif multiple_spheres > 0:
-            grid, sph_grid = create_grid_spherical_multiple(meta_param_dict["rmin"], multiple_spheres, dr,
-                                                            meta_param_dict["dphi"], meta_param_dict["dphi"])
+            grid, sph_grid = create_grid_spherical_multiple(rmin=meta_param_dict["rmin"],
+                                                            multiple_spheres=multiple_spheres, dr=dr,
+                                                            dphi=meta_param_dict["dphi"],
+                                                            dtheta=meta_param_dict["dphi"])
 
         else:
-            grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], dr,
-                                                          meta_param_dict["dphi"], meta_param_dict["dphi"])
+            grid, sph_grid, n_sph = create_grid_spherical(rmin=meta_param_dict["rmin"], rmax=rmax, dr=dr,
+                                                          dphi=meta_param_dict["dphi"], dtheta=meta_param_dict["dphi"])
 
         # file name without extension
         file_ind = os.path.splitext((os.path.split(path)[-1]))[0]
