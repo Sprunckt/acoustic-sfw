@@ -203,15 +203,15 @@ if __name__ == "__main__":
         rmax = meta_param_dict.get("rmax", max_norm)
         multiple_spheres = meta_param_dict.get("multiple_spheres", 0)
         scale_dphi = meta_param_dict.get("scale_dphi", False)
+        dr = meta_param_dict.get("dr", 0.1)
         if scale_dphi:
             grid = meta_param_dict["dphi"]
         elif multiple_spheres > 0:
-            grid, sph_grid = create_grid_spherical_multiple(meta_param_dict["rmin"], multiple_spheres,
-                                                            meta_param_dict["dr"],
+            grid, sph_grid = create_grid_spherical_multiple(meta_param_dict["rmin"], multiple_spheres, dr,
                                                             meta_param_dict["dphi"], meta_param_dict["dphi"])
 
         else:
-            grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], rmax, meta_param_dict["dr"],
+            grid, sph_grid, n_sph = create_grid_spherical(meta_param_dict["rmin"], dr,
                                                           meta_param_dict["dphi"], meta_param_dict["dphi"])
 
         # file name without extension
