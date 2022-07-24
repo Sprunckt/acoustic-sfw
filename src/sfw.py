@@ -477,10 +477,14 @@ class SFW(ABC):
 
                 del gr_opt
 
-            else:
-                mapping = np.apply_along_axis(self.etak, 1, search_grid)
+            else:  # naive method : searching for argmin on grid and using as initialization
+                p = multiprocessing.Pool(self.ncores)
+                mapping = p.map(self.etak, search_grid)
+                p.close()
+
                 ind_max = np.argmin(mapping)
-                self.opt_options["gtol"] = 1e-6
+
+                self.opt_options["gtol"] = 1e-7
                 opti_res = self._optigrid(search_grid[ind_max])
                 nit = opti_res.nit
 

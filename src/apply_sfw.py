@@ -83,6 +83,9 @@ if __name__ == "__main__":
     # amplitude threshold for deleting the spikes
     deletion_tol = meta_param_dict.get("deletion_tol", 0.05)
 
+    # grid search method
+    grid_method = meta_param_dict.get("grid_search", "naive")
+
     # patience for the reconstruction algorithm
     patience = meta_param_dict.get("patience", 1)
 
@@ -282,7 +285,8 @@ if __name__ == "__main__":
         a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              slide_opt=slide_opt, spike_merging=False,
-                             spherical_search=spherical_search, use_hard_stop=True, verbose=True, search_method="rough",
+                             spherical_search=spherical_search, use_hard_stop=True, verbose=True,
+                             search_method=grid_method,
                              early_stopping=True, plot=False, saving_param=save_var, patience=patience)
 
         # reversing the coordinate change
