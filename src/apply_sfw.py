@@ -86,6 +86,9 @@ if __name__ == "__main__":
     # grid search method
     grid_method = meta_param_dict.get("grid_search", "naive")
 
+    # optimization parameters
+    opt_param = meta_param_dict.get("opt_param", None)
+
     # patience for the reconstruction algorithm
     patience = meta_param_dict.get("patience", 1)
 
