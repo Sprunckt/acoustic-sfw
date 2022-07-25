@@ -208,7 +208,7 @@ if __name__ == "__main__":
             grid = meta_param_dict["dphi"]
         elif multiple_spheres > 0:
             grid, sph_grid = create_grid_spherical_multiple(rmin=meta_param_dict["rmin"],
-                                                            multiple_spheres=multiple_spheres, dr=dr,
+                                                            nspheres=multiple_spheres, dr=dr,
                                                             dphi=meta_param_dict["dphi"],
                                                             dtheta=meta_param_dict["dphi"])
 
@@ -288,7 +288,7 @@ if __name__ == "__main__":
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              slide_opt=slide_opt, spike_merging=False,
                              spherical_search=spherical_search, use_hard_stop=True, verbose=True,
-                             search_method=grid_method,
+                             search_method=grid_method, opt_param=opt_param,
                              early_stopping=True, plot=False, saving_param=save_var, patience=patience)
 
         # reversing the coordinate change

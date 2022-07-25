@@ -308,7 +308,7 @@ class SFW(ABC):
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
                     plot=False, algo_start_cb=None, it_start_cb=None,
-                    slide_opt=None, saving_param=None, patience=1) -> (np.ndarray, np.ndarray):
+                    slide_opt=None, saving_param=None, patience=1, opt_param=None) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
 
@@ -328,6 +328,9 @@ class SFW(ABC):
         optimization on each point of the grid before refining on the best position. If "full" : perform a fine
         optimization on each grid point (costly). If "naive" : find the best value on the grid and use it as
         initialization (fastest but less precize).
+            -opt_param (dict): parameters for the spike finding optimization.
+        Keys: * 'roughgtol', 'gtol' tolerance for the optimization algorithm (roughgtol is for the 'rough' pre-search)
+              * 'roughmaxiter': maximum number of iterations for the rough pre-search.
             -spherical_search (int): if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
         on the corresponding sphere. The grid is parametrized by the grid argument.
@@ -358,6 +361,14 @@ class SFW(ABC):
             if not os.path.exists(os.path.dirname(self.save_path)):
                 print("{} does not exists".format(self.save_path))
                 exit(1)
+
+        default_maxiter, default_gtol = 100, 1e-5
+        if opt_param is not None:
+            rough_gtol, gtol = opt_param.get("roughtol", self.opt_options["gtol"]),  opt_param.get("gtol", default_gtol)
+            rough_maxiter = opt_param.get("roughmaxiter", default_maxiter)
+        else:
+            gtol, rough_gtol = default_gtol, self.opt_options["gtol"]
+            rough_maxiter = default_maxiter
 
         assert patience >= 1, "invalid value for patience"
         self.patience = patience
@@ -410,7 +421,6 @@ class SFW(ABC):
 
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
-        rough_gtol = None
 
         self._algorithm_start_callback(**algo_start_cb)
 
@@ -436,14 +446,8 @@ class SFW(ABC):
             if rough_search or search_method == "full":
 
                 if search_method == "rough":  # perform a low precision search
-                    if rough_gtol is None:   # setting rough tolerance for etak optimization
-                        mapping = np.apply_along_axis(self.etak, 1, search_grid)
-                        min_val = np.abs(np.min(mapping))
-                        if min_val < 1:
-                            rough_gtol = 10**-(len(str(int(1/min_val)))-1)
-                        else:
-                            rough_gtol = 10**-(len(str(int(min_val)))-1)
                     self.opt_options["gtol"] = rough_gtol
+                    self.opt_options["maxiter"] = rough_maxiter
 
                 # spreading the loop over multiple processors
                 p = multiprocessing.Pool(self.ncores)
@@ -468,7 +472,9 @@ class SFW(ABC):
 
                 if rough_search:  # perform a finer optimization using the position found as initialization
                     nit = curr_opti_res.nit
-                    self.opt_options["gtol"] = np.minimum(1e-7, rough_gtol)
+                    self.opt_options["gtol"] = 1e-7
+                    self.opt_options["maxiter"] = None
+
                     opti_res = self._optigrid(curr_opti_res.x)
                     nit += opti_res.nit
                 else:
