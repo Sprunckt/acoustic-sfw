@@ -89,6 +89,9 @@ if __name__ == "__main__":
     # optimization parameters
     opt_param = meta_param_dict.get("opt_param", None)
 
+    # number of microphones considered during the spherical search
+    nmic = meta_param_dict.get("nmic", None)
+
     # patience for the reconstruction algorithm
     patience = meta_param_dict.get("patience", 1)
 
@@ -291,7 +294,7 @@ if __name__ == "__main__":
                              max_ampl=200, algo_start_cb=algo_start_cb,
                              slide_opt=slide_opt, spike_merging=False,
                              spherical_search=spherical_search, use_hard_stop=True, verbose=True,
-                             search_method=grid_method, opt_param=opt_param,
+                             search_method=grid_method, opt_param=opt_param, nmic=nmic,
                              early_stopping=True, plot=False, saving_param=save_var, patience=patience)
 
         # reversing the coordinate change

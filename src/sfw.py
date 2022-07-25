@@ -307,7 +307,7 @@ class SFW(ABC):
     def reconstruct(self, grid=None, niter=7, min_norm=-np.inf, max_norm=np.inf, max_ampl=np.inf,
                     search_method="rough", spike_merging=False, spherical_search=0,
                     use_hard_stop=True, verbose=True, early_stopping=False,
-                    plot=False, algo_start_cb=None, it_start_cb=None,
+                    plot=False, algo_start_cb=None, it_start_cb=None, nmic=None,
                     slide_opt=None, saving_param=None, patience=1, opt_param=None) -> (np.ndarray, np.ndarray):
         """
         Apply the SFW algorithm to reconstruct the measure based on the measurements self.y.
@@ -333,7 +333,9 @@ class SFW(ABC):
               * 'roughmaxiter': maximum number of iterations for the rough pre-search.
             -spherical_search (int): if equal to 1 : assume that the given grid is spherical. The maximum energy spike
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
-        on the corresponding sphere. The grid is parametrized by the grid argument.
+        on the corresponding sphere. The grid is parametrized by the grid argument. The argument nmic can be used to
+        increase the number of considered microphone during the initialization.
+            -nmic (int): number of microphone considered for the spherical search (ie one sphere per microphone)
             -algo_start_cb (dict): dictionary containing the arguments passed to the algorithm start callback
             it_start_cb (dict): dictionary containing the arguments passed to the iteration start callback
             -slide_opt (dict) : dictionary containing the options for the sliding step. If None : perform a full sliding
@@ -369,6 +371,8 @@ class SFW(ABC):
         else:
             gtol, rough_gtol = default_gtol, self.opt_options["gtol"]
             rough_maxiter = default_maxiter
+        if nmic is None:
+            nmic = 1
 
         assert patience >= 1, "invalid value for patience"
         self.patience = patience
@@ -437,7 +441,7 @@ class SFW(ABC):
             tstart = time.time()
 
             if spherical_search == 1:  # take argmax on the complete rir and search on the corresponding sphere
-                search_grid = self._grid_initialization_function(grid, verbose=verbose)
+                search_grid = self._grid_initialization_function((grid, nmic), verbose=verbose)
 
             if verbose:
                 print("Starting a grid search to minimize etak, method : ", search_method)
@@ -588,7 +592,7 @@ class SFW(ABC):
 
             if nk_tmp == 0:
                 self.ak, self.xk, self.nk = np.zeros(1), np.zeros((1, self.d)), 0
-                if self._on_stop(reason='all_null', verbose=verbose):
+                if self._on_stop(reason='All spikes null', verbose=verbose):
                     print("Error : all spikes are null, stopping")
                     return self._stop(verbose=verbose)
                 else:
@@ -928,25 +932,18 @@ class TimeDomainSFW(SFW):
         return jac
 
     def _grid_initialization_function(self, parameter, verbose, **params):
-        curr_max, n_max, m_max = -1, 0, 0
+        sphere, n_kept = parameter
+        val, ind_max = np.zeros(self.M), np.zeros(self.M, dtype=int)
         for m in range(self.M):
-            ind_tmp, max_tmp = sliding_window_norm(self.res[m*self.N: (m+1)*self.N], 3)
-            if max_tmp > curr_max:
-                curr_max = max_tmp
-                n_max, m_max = ind_tmp, m
+            ind_max[m], val[m] = sliding_window_norm(self.res[m * self.N: (m + 1) * self.N], 3)
 
-        r = n_max * c / self.fs
-        if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
-            grid = r * parameter
-        else:  # no pre-generated grid
-            if r > np.e:  # increase the number of nodes on the grid if the radius exceeds e
-                dtheta = parameter / np.log(r)
-            else:
-                dtheta = parameter
-            grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
-        search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
+        ind_best = np.argsort(val)[-n_kept:]
+        r = ind_max[ind_best] * c / self.fs  # radiuses, shape (nkept,)
+        search_grid = np.reshape(r[:, np.newaxis, np.newaxis] * sphere[np.newaxis, :, :]
+                                 + self.mic_pos[ind_best][:, np.newaxis, :], [-1, self.d])
+
         if verbose:
-            print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
+            print("searching around mic {} at radius {}, {} grid points".format(ind_best, r, len(search_grid)))
         return search_grid
 
     def _get_normalized_fun(self):
@@ -1287,9 +1284,9 @@ class FrequencyDomainSFW(SFW):
 
         return can_extend
 
-    def _on_stop(self, verbose=False):
+    def _on_stop(self, reason=None, verbose=False):
         """Stop if the time RIR cannot be extended further"""
-        can_extend = self._extend_rir(reason="stopping criterion met", verbose=verbose)
+        can_extend = self._extend_rir(reason=reason, verbose=verbose)
 
         return not can_extend
 
@@ -1313,28 +1310,7 @@ class FrequencyDomainSFW(SFW):
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
     def _grid_initialization_function(self, parameter, verbose):
-        # compute the time domain residue
-        self.time_sfw.res = self.time_sfw.y - self.time_sfw.gamma(self.ak, self.xk)
-        curr_max, n_max, m_max = -1, 0, 0
-        for m in range(self.M):
-            ind_tmp, max_tmp = sliding_window_norm(self.time_sfw.res[m * self.time_sfw.N: (m + 1) * self.time_sfw.N], 3)
-            if max_tmp > curr_max:
-                curr_max = max_tmp
-                n_max, m_max = ind_tmp, m
-
-        r = n_max * c / self.fs
-        if type(parameter) == np.ndarray:  # use the generated grid and scale it to the correct radius
-            grid = r * parameter
-        else:  # no pre-generated grid
-            if r > np.e:  # increase the number of nodes on the grid if the radius exceeds e
-                dtheta = parameter / np.log(r)
-            else:
-                dtheta = parameter
-            grid, sph_grid, n_sph = create_grid_spherical(r, r, 1., dtheta=dtheta, dphi=dtheta)
-        search_grid = grid + self.mic_pos[m_max][np.newaxis, :]
-        if verbose:
-            print("searching around mic {} at a radius {}, {} grid points".format(m_max, r, len(grid)))
-        return search_grid
+        return self.time_sfw._grid_initialization_function(parameter, verbose)
 
     def _get_normalized_fun(self):
         normalized_eta_jac = self._jac_etak
