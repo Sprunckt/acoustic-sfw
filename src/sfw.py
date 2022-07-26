@@ -166,11 +166,15 @@ class SFW(ABC):
         a, x = var[:n_spikes], var[n_spikes:].reshape(-1, self.d)
         return 0.5 * np.sum((self.gamma(a, x) - y) ** 2) + self.lam * np.sum(np.abs(a))
 
-    def _optigrid(self, x):
+    def _optigrid(self, x, success=False):
         """
         Wrapper for the spike selection optimization step
         """
-        return minimize(self.etak, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
+        opt_res = minimize(self.etak, x, jac=self.eta_jac, method="BFGS", options=self.opt_options)
+        if success:
+            return [*opt_res.x, opt_res.fun, opt_res.nit, opt_res.success, opt_res.message]
+        else:
+            return [*opt_res.x, opt_res.fun, opt_res.nit]
 
     def _stop(self, verbose=True):
         """
@@ -447,25 +451,21 @@ class SFW(ABC):
                 print("Starting a grid search to minimize etak, method : ", search_method)
 
             rough_search = search_method == "rough"
-            if rough_search or search_method == "full":
-
-                if search_method == "rough":  # perform a low precision search
-                    self.opt_options["gtol"] = rough_gtol
-                    self.opt_options["maxiter"] = rough_maxiter
+            if rough_search:
+                # perform a low precision search at each grid point
+                self.opt_options["gtol"] = rough_gtol
+                self.opt_options["maxiter"] = rough_maxiter
 
                 # spreading the loop over multiple processors
                 p = multiprocessing.Pool(self.ncores)
-                gr_opt = p.map(self._optigrid, search_grid)
+                gr_opt = np.array(p.map(self._optigrid, search_grid))
                 p.close()
 
-                # searching for the best result over the grid
-                curr_min, curr_opti_res = np.inf, None
-                for el in gr_opt:
-                    if el.fun < curr_min and np.linalg.norm(el.x) > min_norm:
-                        curr_min = el.fun
-                        curr_opti_res = el
+                # searching for the best result over the grid at a minimal distance from the origin
+                norms = np.linalg.norm(gr_opt[:, :self.d], axis=1)
+                best_ind = gr_opt[:, self.d][norms > min_norm]
 
-                if curr_opti_res is None:  # it means the spikes found are all inside the ball of radius min_norm
+                if len(best_ind) == 0:  # it means the spikes found are all inside the ball of radius min_norm
                     if verbose:
                         print("Cannot find a spike outside the minimal norm ball")
                     if self._on_stop(verbose=verbose):
@@ -473,19 +473,17 @@ class SFW(ABC):
                     else:
                         self._it_end_cb()
                         continue
-
-                if rough_search:  # perform a finer optimization using the position found as initialization
-                    nit = curr_opti_res.nit
-                    self.opt_options["gtol"] = 1e-7
-                    self.opt_options["maxiter"] = None
-
-                    opti_res = self._optigrid(curr_opti_res.x)
-                    nit += opti_res.nit
                 else:
-                    opti_res = curr_opti_res
-                    nit = opti_res.nit
+                    best_ind = np.argmin(best_ind)
+                    best_x = gr_opt[best_ind, :self.d]
+                    nit = gr_opt[best_ind, self.d+1]
 
-                del gr_opt
+                # perform a finer optimization using the position found as initialization
+                self.opt_options["gtol"] = gtol
+                self.opt_options["maxiter"] = None
+
+                gr_opt = self._optigrid(best_x, success=True)
+                gr_opt[self.d+1] += nit  # increment by the previous number of iterations
 
             else:  # naive method : searching for argmin on grid and using as initialization
                 p = multiprocessing.Pool(self.ncores)
@@ -494,21 +492,21 @@ class SFW(ABC):
 
                 ind_max = np.argmin(mapping)
 
-                self.opt_options["gtol"] = 1e-7
-                opti_res = self._optigrid(search_grid[ind_max])
-                nit = opti_res.nit
+                self.opt_options["gtol"] = gtol
+                gr_opt = self._optigrid(search_grid[ind_max], success=True)
+
+            x_new, best_val, nit = np.reshape(gr_opt[:self.d], [1, self.d]), gr_opt[self.d], gr_opt[self.d+1]
 
             if self.lam > 0.:
-                etaval = np.abs(opti_res.fun) / self.lam
+                etaval = np.abs(best_val) / self.lam
             else:
-                etaval = np.abs(opti_res.fun)
-            x_new = opti_res.x.reshape([1, self.d])
+                etaval = np.abs(best_val)
 
             if verbose:
                 print("exec time for grid optimization : ", time.time() - tstart)
-
-            if not opti_res.success:
-                print("etak optimization failed, reason : {}".format(opti_res.message))
+            success = gr_opt[self.d+2]
+            if not success:
+                print("etak optimization failed, reason : {}".format(gr_opt[self.d+3]))
 
             if verbose:
                 print("Optimization converged in {} iterations".format(nit))
