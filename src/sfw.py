@@ -4,6 +4,7 @@ from typing import Union, Tuple
 import pandas as pd
 from scipy.optimize import minimize
 from optimparallel import minimize_parallel
+from scipy.signal import decimate
 from sklearn.linear_model import Lasso, LinearRegression
 from src.simulation.utils import (disp_measure, c, cut_vec_rir, create_grid_spherical)
 import multiprocessing
@@ -230,7 +231,7 @@ class SFW(ABC):
         return tot_merged
 
     @abstractmethod
-    def _grid_initialization_function(self, parameters, verbose):
+    def _grid_initialization_function(self, search_method, grid, nmic, verbose, **parameters):
         """Functions that configures a grid for the initialization of the step finding step."""
         pass
 
@@ -418,7 +419,7 @@ class SFW(ABC):
 
         reslide_counter = 0
 
-        search_grid = grid
+        search_grid = grid.copy()  # making a copy to be sure the original grid is not modified afterwards
         assert search_grid is not None, "a grid must be specified for the initial grid search"
 
         if algo_start_cb is None:
@@ -430,7 +431,11 @@ class SFW(ABC):
         it_start_cb["verbose"] = verbose
         algo_start_cb["verbose"] = verbose
 
-        self._algorithm_start_callback(**algo_start_cb)
+        if search_method == 'decimation':
+            assert isinstance(self, TimeDomainSFW), "decimation only supported in standard time domain"
+            algo_start_cb["activate_decimation"] = True
+
+        start_cb_ret = self._algorithm_start_callback(**algo_start_cb)
 
         while self.it < niter:
             self.it += 1
@@ -441,11 +446,14 @@ class SFW(ABC):
             # find argmax etak to get the new spike position (step 3)
             if verbose:
                 print("Optimizing for spike position -----")
-            # grid search : one optimization per grid point (the grid has the shape (Ngrid, d))
+
             tstart = time.time()
 
             if spherical_search == 1:  # take argmax on the complete rir and search on the corresponding sphere
-                search_grid = self._grid_initialization_function((grid, nmic), verbose=verbose)
+                if search_method == "decimation":
+                    search_grid = self._grid_initialization_function(search_method, grid, nmic, dec_obj=start_cb_ret,                                                       verbose=verbose)
+                else:
+                    search_grid = self._grid_initialization_function(search_method, grid, nmic, verbose=verbose)
 
             if verbose:
                 print("Starting a grid search to minimize etak, method : ", search_method)
@@ -484,7 +492,7 @@ class SFW(ABC):
                 gr_opt = self._optigrid(best_x, success=True)
                 gr_opt[self.d+1] += nit  # increment by the previous number of iterations
 
-            else:  # naive method : searching for argmin on grid and using as initialization
+            elif search_method == 'naive':  # naive method : searching for argmin on grid and using as initialization
                 p = multiprocessing.Pool(self.ncores)
                 mapping = p.map(self.etak, search_grid)
                 p.close()
@@ -493,6 +501,23 @@ class SFW(ABC):
 
                 self.opt_options["gtol"] = gtol
                 gr_opt = self._optigrid(search_grid[ind_max], success=True)
+
+            else:  # decimation method
+                success, res = start_cb_ret.grid_search(search_grid, min_norm=min_norm, rough_gtol=rough_gtol,
+                                                        rough_maxiter=rough_maxiter, verbose=verbose)
+
+                if not success:  # case where no spikes were found outside of the minimal norm ball
+                    if self._on_stop(verbose=verbose):
+                        return self._stop(verbose=verbose)
+                    else:
+                        self._it_end_cb()
+                        continue
+
+                # perform a finer optimization using the position found as initialization
+                self.opt_options["gtol"] = gtol
+                self.opt_options["maxiter"] = None
+
+                gr_opt = self._optigrid(res, success=True)
 
             x_new, best_val, nit = np.reshape(gr_opt[:self.d], [1, self.d]), gr_opt[self.d], gr_opt[self.d+1]
 
@@ -707,7 +732,8 @@ class TimeDomainSFW(SFW):
         assert self.y.size == self.J, "invalid measurements length, {} != {}".format(self.y.size, self.J)
 
     def _algorithm_start_callback(self, verbose=False, n_cut=0, int_start=None,
-                                  swap_frequency=10, swap_factor=0.5, method='energy', min_dist=2.):
+                                  swap_frequency=10, swap_factor=0.5, method='energy', min_dist=2.,
+                                  decimation_args=None, activate_decimation=False):
         """Parametrize the segmentation of the time interval.
         Args:-n_cut (int) : number of cutting thresholds (number of subintervals -1). Set to 0 to use the full RIR.
         10 is a good default value for 60ms.
@@ -769,6 +795,12 @@ class TimeDomainSFW(SFW):
         else:
             self.cut_ind = np.empty(0)
         self.current_ind = 0
+
+        if activate_decimation:
+            if decimation_args is None:
+                decimation_args = {"nb_decimation": 2}
+            dec = Decimation(self, **decimation_args)
+            return dec
 
     def _extend_rir(self, reason, verbose=False):
         if self.current_ind < self.n_cut - 1:  # check that the last threshold has not been reached
@@ -928,20 +960,26 @@ class TimeDomainSFW(SFW):
 
         return jac
 
-    def _grid_initialization_function(self, parameter, verbose, **params):
-        sphere, n_kept = parameter
-        val, ind_max = np.zeros(self.M), np.zeros(self.M, dtype=int)
-        for m in range(self.M):
-            ind_max[m], val[m] = sliding_window_norm(self.res[m * self.N: (m + 1) * self.N], 3)
+    def _grid_initialization_function(self, search_method, grid, nmic, verbose, **params):
+        if search_method == 'decimation':
+            # update residues and vector lengths
+            params["dec_obj"].decimate_residue()
+            # intialization using the smallest sampling frequency
+            return params["dec_obj"].sub_sfw[-1]._grid_initialization_function(search_method="standard", grid=grid,
+                                                                               nmic=nmic, verbose=verbose, **params)
+        else:
+            val, ind_max = np.zeros(self.M), np.zeros(self.M, dtype=int)
+            for m in range(self.M):
+                ind_max[m], val[m] = sliding_window_norm(self.res[m * self.N: (m + 1) * self.N], 3)
 
-        ind_best = np.argsort(val)[-n_kept:]
-        r = ind_max[ind_best] * c / self.fs  # radiuses, shape (nkept,)
-        search_grid = np.reshape(r[:, np.newaxis, np.newaxis] * sphere[np.newaxis, :, :]
-                                 + self.mic_pos[ind_best][:, np.newaxis, :], [-1, self.d])
+            ind_best = np.argsort(val)[-nmic:]
+            r = ind_max[ind_best] * c / self.fs  # radiuses, shape (nkept,)
+            search_grid = np.reshape(r[:, np.newaxis, np.newaxis] * grid[np.newaxis, :, :]
+                                     + self.mic_pos[ind_best][:, np.newaxis, :], [-1, self.d])
 
-        if verbose:
-            print("searching around mic {} at radius {}, {} grid points".format(ind_best, r, len(search_grid)))
-        return search_grid
+            if verbose:
+                print("searching around mic {} at radius {}, {} grid points".format(ind_best, r, len(search_grid)))
+            return search_grid
 
     def _get_normalized_fun(self):
         normalized_eta_jac = self._jac_etak
@@ -1501,3 +1539,63 @@ class DeconvolutionSFW(SFW):
     def update_mic_pos(self, new_pos):
         self.mic_pos = new_pos
         self.freq_sfw.update_mic_pos(new_pos)
+
+
+class Decimation:
+    def __init__(self, original_sfw, nb_decimation, discard_factor=0.5):
+        self.original_sfw, self.nb_decimation = original_sfw, nb_decimation
+        self.discard_factor = discard_factor
+        self.sub_sfw = []
+        previous_sf, y = original_sfw, original_sfw.y
+        for i in range(nb_decimation):  # create decimated sfw objects
+            new_fs = previous_sf.fs / 2.
+
+            # the signal y is not decimated and will not be used (the residual will be decimated later)
+            decimated_sf = TimeDomainSFW(y=y, N=self.original_sfw.N, mic_pos=original_sfw.mic_pos, fs=new_fs,
+                                         lam=original_sfw.lam, deletion_tol=original_sfw.deletion_tol, fc=new_fs)
+            self.sub_sfw.append(decimated_sf)
+            previous_sf = decimated_sf
+
+    def decimate_residue(self):
+        for i in range(self.nb_decimation):
+            self.sub_sfw[i].res = decimate(self.original_sfw.res.reshape([self.original_sfw.M, -1]),
+                                           q=2**(i+1), axis=-1,ftype='fir')
+            self.sub_sfw[i].N = self.sub_sfw[i].res.shape[1]  # update to decimated length
+            self.sub_sfw[i].res = self.sub_sfw[i].res.reshape(-1)
+            self.sub_sfw[i].NN = compute_time_sample(self.sub_sfw[i].N, self.sub_sfw[i].fs)
+
+    def grid_search(self, grid, min_norm,  rough_gtol, rough_maxiter, verbose=False):
+        p = multiprocessing.Pool(self.original_sfw.ncores)
+        nkept = len(grid)
+        # perform original search at lowest sampling frequency first
+        for i in range(self.nb_decimation-1, -1, -1):
+            # perform a low precision search at each grid point
+            self.sub_sfw[i].opt_options["gtol"] = rough_gtol
+            self.sub_sfw[i].opt_options["maxiter"] = rough_maxiter
+
+            gr_opt = np.array(p.map(self.sub_sfw[i]._optigrid, grid))
+
+            # searching for the best result over the grid at a minimal distance from the origin
+            norms = np.linalg.norm(gr_opt[:, :self.original_sfw.d], axis=1)
+
+            kept_points = gr_opt[:, :self.original_sfw.d+1][norms > min_norm]
+
+            if len(kept_points) == 0:  # it means the spikes found are all inside the ball of radius min_norm
+                if verbose:
+                    print("Cannot find a spike outside the minimal norm ball")
+                if i > 0:  # actual sampling frequency not found, pass
+                    continue
+                else:
+                    return False, None
+            else:
+                nkept = np.maximum(int(self.discard_factor*nkept), 1)  # keep at least one grid point
+                best_ind = np.argsort(kept_points[:, self.original_sfw.d])[:nkept]
+
+                if i == 0:
+                    grid = kept_points[best_ind[0], :self.original_sfw.d]
+                else:
+                    grid = kept_points[best_ind, :self.original_sfw.d]
+
+        p.close()
+
+        return True, grid
