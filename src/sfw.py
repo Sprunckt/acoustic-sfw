@@ -450,8 +450,7 @@ class SFW(ABC):
             if verbose:
                 print("Starting a grid search to minimize etak, method : ", search_method)
 
-            rough_search = search_method == "rough"
-            if rough_search:
+            if search_method == "rough":
                 # perform a low precision search at each grid point
                 self.opt_options["gtol"] = rough_gtol
                 self.opt_options["maxiter"] = rough_maxiter
@@ -463,9 +462,9 @@ class SFW(ABC):
 
                 # searching for the best result over the grid at a minimal distance from the origin
                 norms = np.linalg.norm(gr_opt[:, :self.d], axis=1)
-                best_ind = gr_opt[:, self.d][norms > min_norm]
+                kept_ind = gr_opt[norms > min_norm]
 
-                if len(best_ind) == 0:  # it means the spikes found are all inside the ball of radius min_norm
+                if len(kept_ind) == 0:  # it means the spikes found are all inside the ball of radius min_norm
                     if verbose:
                         print("Cannot find a spike outside the minimal norm ball")
                     if self._on_stop(verbose=verbose):
@@ -474,9 +473,9 @@ class SFW(ABC):
                         self._it_end_cb()
                         continue
                 else:
-                    best_ind = np.argmin(best_ind)
-                    best_x = gr_opt[best_ind, :self.d]
-                    nit = gr_opt[best_ind, self.d+1]
+                    best_ind = np.argmin(kept_ind[:, self.d])
+                    best_x = kept_ind[best_ind, :self.d]
+                    nit = kept_ind[best_ind, self.d+1]
 
                 # perform a finer optimization using the position found as initialization
                 self.opt_options["gtol"] = gtol
