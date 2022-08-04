@@ -332,7 +332,11 @@ class SFW(ABC):
             -search_method (str): grid search methods for the spike position search. If "rough" : perform a coarse
         optimization on each point of the grid before refining on the best position. If "full" : perform a fine
         optimization on each grid point (costly). If "naive" : find the best value on the grid and use it as
-        initialization (fastest but less precize).
+        initialization (quicker but less precise with coarser grids). If "decimation": decimates the signal several
+        times and apply the rough method on the decimated, using the best values at each decimation level as
+        initialization for the next level until the complete signal is reached. The number of decimations and kept
+        points at each level can be specified in a dict "decimation_args" that should be contained in the start_cb dict
+        and can have keys: "nb_decimation", "discard_factor".
             -opt_param (dict): parameters for the spike finding optimization.
         Keys: * 'roughgtol', 'gtol' tolerance for the optimization algorithm (roughgtol is for the 'rough' pre-search)
               * 'roughmaxiter': maximum number of iterations for the rough pre-search.
@@ -451,7 +455,8 @@ class SFW(ABC):
 
             if spherical_search == 1:  # take argmax on the complete rir and search on the corresponding sphere
                 if search_method == "decimation":
-                    search_grid = self._grid_initialization_function(search_method, grid, nmic, dec_obj=start_cb_ret,                                                       verbose=verbose)
+                    search_grid = self._grid_initialization_function(search_method, grid, nmic, dec_obj=start_cb_ret,
+                                                                     verbose=verbose)
                 else:
                     search_grid = self._grid_initialization_function(search_method, grid, nmic, verbose=verbose)
 
@@ -1344,8 +1349,8 @@ class FrequencyDomainSFW(SFW):
 
         return lasso_fitter, lasso_fitter.coef_.flatten()
 
-    def _grid_initialization_function(self, parameter, verbose):
-        return self.time_sfw._grid_initialization_function(parameter, verbose)
+    def _grid_initialization_function(self, search_method, grid, nmic, verbose, **params):
+        return self.time_sfw._grid_initialization_function(search_method, grid, nmic, verbose, **params)
 
     def _get_normalized_fun(self):
         normalized_eta_jac = self._jac_etak
@@ -1468,7 +1473,8 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
 
 
 class DeconvolutionSFW(SFW):
-    """Blind spikes deconvolution. Does not work correctly with current initialization."""
+    """Blind spikes deconvolution. Does not work correctly with current initialization, and time segmentation is not
+    supported."""
     def __init__(self, source_pos, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
                  mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
         self.mic_pos, self.M = mic_pos, len(mic_pos)
@@ -1530,8 +1536,8 @@ class DeconvolutionSFW(SFW):
 
         self.freq_sfw._iteration_start_callback(verbose=verbose)
 
-    def _grid_initialization_function(self, parameters, verbose):
-        return self.freq_sfw._grid_initialization_function(parameters, verbose)
+    def _grid_initialization_function(self, search_method, grid, nmic, verbose, **params):
+        return self.freq_sfw._grid_initialization_function(search_method, grid, nmic, verbose, **params)
 
     def get_cut_ind(self):
         return self.freq_sfw.get_cut_ind()

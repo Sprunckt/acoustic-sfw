@@ -113,8 +113,7 @@ if __name__ == "__main__":
         if ms is not None:  # overwrite the microphone positions
             mic_pos = load_antenna(mic_size=ms)
         else:  # use default values
-            ms = param_dict["mic_size"]
-            mic_pos = param_dict["mic_array"]
+            mic_pos = load_antenna(mic_size=1.)
 
         rot = meta_param_dict.get("rotation_mic")
         if rot is not None:  # overwrite the default rotation
