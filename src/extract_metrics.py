@@ -1,9 +1,8 @@
 """
 Get the relevant metrics for a set of experiments
-Meant to be used as a script in command line.
+Can be used as a script in command line.
 """
 import numpy as np
-import matplotlib.pyplot as plt
 from src.simulation.utils import (json_to_dict, correlation, unique_matches, compare_arrays)
 from src.tools.geometry_reconstruction import great_circle_distance, radial_distance
 import pandas as pd
@@ -14,11 +13,13 @@ import getopt
 
 def count_results(directory):
     files = os.listdir(directory)
-    k = 0
+    k, max_ind = 0, 0
     for f in files:
-        if "_res.json" in f:
+        fsplit = f.split("_")
+        if "res.json" == fsplit[-1]:
             k += 1
-    return k
+            max_ind = np.maximum(max_ind, int(fsplit[-2]))
+    return k, max_ind
 
 
 def extract_subdirectories(pth):
@@ -38,7 +39,7 @@ def extract_subdirectories(pth):
     return subdir
 
 
-def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
+def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
                 max_norm=None, unique=True, distance="cartesian", reconstr_ampl_threshold=None, metrics_path=None,
                 return_paths=False):
 
@@ -46,45 +47,38 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
 
     if tol is None:  # setting default tolerance depending on the distance type
         if distance == 'cartesian':
-            tol = 5e-2
+            tol = [5e-2]
         elif distance == 'spherical':
-            tol = [1e-2, 12]
+            tol = [[1e-2, 12]]
     else:
         if type(tol) == str:
             if distance == 'cartesian':
-                tol = float(tol)
+                tol = [float(tol)]
             else:
-                tol = [float(a) for a in tol.split(',')]
+                tol = [[float(a) for a in tol.split(',')]]
 
     if distance == 'spherical':
-        assert len(tol) == 2, 'tol should be a list containing the radial and angular thresholds'
+        assert len(tol[0]) == 2, 'tol should be a list containing the radial and angular thresholds'
+    ntol = len(tol)
 
     path_list = []
     for path in paths:
         path_list += extract_subdirectories(path)
 
-    df = pd.DataFrame(columns=["exp_id", "TP", "FN", "FP", "precision", "recall"])
+    global_dfs = [pd.DataFrame(columns=["exp_id", "TP", "FN", "FP", "precision", "recall"]) for _ in range(ntol)]
     for path in path_list:  # loop over every directory
-        n_res = count_results(path)
+        n_res, max_ind = count_results(path)
+        col = ["exp_id", "nb_src", "nb_found", "nb_recov", "recall", "precision", "ampl_corr", "ampl_rel_error",
+               "mean_recov_dist", "mean_recov_radial_dist", "mean_recov_angular_dist", "mean_radial_dist",
+               "mean_angular_dist"]
+        types = [int, int, int, int, float, float, float, float, float, float, float, float, float]
 
-        col = ["exp_id", "nb_src", "nb_found", "nb_recov", "recall", "precision", "ampl_corr", "ampl_rel_error"]
-        types = [int, int, int, int, float, float, float, float, float]
+        exp_dfs = [pd.DataFrame(columns=col).astype({col[i]: types[i] for i in range(len(col))})
+                   for _ in range(ntol)]  # one DF per tolerance threshold given
 
-        if distance == "cartesian":
-            col.append("mean_recov_dist")
-        elif distance == "spherical":
-            col.append("mean_recov_radial_dist")
-            col.append("mean_recov_angular_dist")
-            types.append(float)
+        tp, fp, fn = [0]*ntol, [0]*ntol, [0]*ntol
 
-        exp_df = pd.DataFrame(columns=col).astype({col[i]: types[i] for i in range(len(col))})
-
-        thresholds = np.logspace(np.log10(1e-4), np.log10(0.3), n_plot)
-        tp, fp, fn = 0, 0, 0
-        global_tp, global_fp = np.zeros_like(thresholds), np.zeros_like(thresholds)
-        global_fn = np.zeros_like(thresholds)
-
-        for i in range(n_res):  # loop over every experiment
+        for i in range(max_ind + 1):  # loop over every experiment
             complete_path = os.path.join(path, "exp_{}_res.json".format(i))
 
             try:
@@ -115,7 +109,6 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                                             - mic_array[:, np.newaxis, :]) ** 2, axis=2))
                 # find the sources that are at a distance at most 'delimiter' of at least one microphone
                 remaining_src_ind = np.any(real_dist < delimiter, axis=0)
-
                 # compute the minimal distance to the array
                 real_dist = np.min(real_dist[:, remaining_src_ind], axis=0)
                 sort_ind = np.argsort(real_dist)  # sort according to distance
@@ -138,11 +131,11 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 print("method option not recognized. \n"
                       "method should be in ['amplitude', 'order', 'distance']")
                 exit(1)
-            nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
             if max_norm is not None:
                 norm_ind = np.linalg.norm(real_sources, axis=-1) <= max_norm
                 real_sources, real_ampl = real_sources[norm_ind], real_ampl[norm_ind]
+            nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
             if unique:
                 # unique matches, looking only at the True positives at minimum distance
@@ -151,84 +144,83 @@ def get_metrics(paths, save_path=None, n_plot=0, show=False, method="amplitude",
                 indb, dist = compare_arrays(predicted_sources, real_sources)
                 inda = np.arange(len(reconstr_ampl))
 
-            if distance == "cartesian":
-                ind_tol = dist < tol
-            elif distance == "spherical":
-                dist_rad = radial_distance(predicted_sources[inda], real_sources[indb])
-                dist_circle = great_circle_distance(predicted_sources[inda], real_sources[indb],
-                                                    rad=False)  # circle distance in degrees
-                ind_tol = (dist_rad < tol[0]) & (dist_circle < tol[1])
-            else:
-                ind_tol = None
+            # radial distance
+            dist_rad = radial_distance(predicted_sources[inda], real_sources[indb])
+            # circle distance in degrees
+            dist_circle = great_circle_distance(predicted_sources[inda], real_sources[indb], rad=False)
 
-            sorted_ampl_reconstr = reconstr_ampl[inda][ind_tol]
-            sorted_ampl_exact = real_ampl[indb][ind_tol]
+            for k, sub_tol in enumerate(tol):
+                if distance == "cartesian":
+                    ind_tol = dist < sub_tol
+                elif distance == "spherical":
+                    ind_tol = (dist_rad < sub_tol[0]) & (dist_circle < sub_tol[1])
+                else:
+                    ind_tol = None
 
-            # correlation and relative error for the amplitudes of the best (max ampl) recovered sources
-            correlation_ampl = correlation(sorted_ampl_exact, sorted_ampl_reconstr)
-            relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
-            # number of distinct recovered sources
-            ctp = ind_tol.sum()
-            nb_real = len(real_sources)  # expected number of sources
+                sorted_ampl_reconstr = reconstr_ampl[inda][ind_tol]
+                sorted_ampl_exact = real_ampl[indb][ind_tol]
 
-            tp += ctp  # positions correctly guessed
-            fp += nb_found - ctp  # positions incorrectly guessed
-            fn += nb_needed - ctp  # sources not found (false negatives)
+                # correlation and relative error for the amplitudes of the best (max ampl) recovered sources
+                correlation_ampl = correlation(sorted_ampl_exact, sorted_ampl_reconstr)
+                relative_error = np.mean(np.abs(sorted_ampl_exact - sorted_ampl_reconstr) / sorted_ampl_exact)
+                # number of distinct recovered sources
+                ctp = ind_tol.sum()
+                nb_real = len(real_sources)  # expected number of sources
 
-            if n_plot > 0:
-                # current true positives computed at every threshold for plotting
-                complete_ctp = (dist < thresholds[:, np.newaxis]).sum(axis=-1)
-                global_tp += complete_ctp  # positions correctly guessed
-                global_fp += nb_found - complete_ctp  # positions incorrectly guessed
-                global_fn += nb_needed - complete_ctp  # sources not found (false negatives)
+                tp[k] += ctp  # positions correctly guessed
+                fp[k] += nb_found - ctp  # positions incorrectly guessed
+                fn[k] += nb_needed - ctp  # sources not found (false negatives)
 
-            entry = dict(exp_id=i, nb_src=nb_real, nb_found=nb_found, nb_recov=ctp, recall=ctp/nb_real,
-                         precision=ctp/nb_found, ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
+                entry = dict(exp_id=i, nb_src=nb_real, nb_found=nb_found, nb_recov=ctp, recall=ctp/nb_real,
+                             precision=ctp/nb_found, ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
 
-            if distance == 'cartesian':
-                # mean distance to real sources for the best recovered sources
+                # mean cartesian distance to real sources for the best recovered sources
                 entry["mean_recov_dist"] = dist[ind_tol].mean()
-            elif distance == 'spherical':
+                # mean distance to real sources for all recovered sources
+                if not unique:
+                    entry["mean_dist"] = dist.mean()
+                else:
+                    _, all_dist = compare_arrays(predicted_sources, real_sources)
+                    entry["mean_dist"] = all_dist.mean()
+
+                # spherical distances
                 entry["mean_recov_radial_dist"] = dist_rad[ind_tol].mean()
                 entry["mean_recov_angular_dist"] = dist_circle[ind_tol].mean()
 
-            exp_df = exp_df.append(entry, ignore_index=True)
+                if not unique:
+                    entry["mean_radial_dist"] = dist_rad.mean()
+                    entry["mean_angular_dist"] = dist_circle.mean()
+                else:
+                    all_ind, _ = compare_arrays(predicted_sources, real_sources)
+                    all_dist_rad = radial_distance(predicted_sources, real_sources[all_ind])
+                    all_dist_circle = great_circle_distance(predicted_sources, real_sources[all_ind], rad=False)
+                    entry["mean_radial_dist"] = all_dist_rad.mean()
+                    entry["mean_angular_dist"] = all_dist_circle.mean()
 
-        if n_plot > 0:
-            plt.plot(thresholds, global_tp / (global_tp + global_fp), '-.', label='precision')
-            plt.plot(thresholds, global_tp / (global_tp + global_fn), '-.', label='recall')
-            plt.xlabel('tolerance threshold')
-            plt.ylabel('recovery ratio')
-            plt.xscale('log')
-            plt.legend()
-            if save_path is not None:
-                plt.savefig(os.path.join(save_path, '{}_recall_curve.pdf'.format(os.path.split(path)[-1])))
-            if show:
-                plt.show()
-            else:
-                plt.clf()
+                exp_dfs[k] = exp_dfs[k].append(entry, ignore_index=True)
 
         if metrics_path is not None:
-            exp_df.to_csv(os.path.join(metrics_path, "{}_metrics_{}.csv".format(os.path.split(path)[-1], tol)),
-                          index=False)
-        else:
-            exp_df.to_csv(os.path.join(path, "metrics_{}.csv".format(tol)), index=False)
+            for k in range(ntol):
+                exp_dfs[k].to_csv(os.path.join(metrics_path, "{}_metrics_{}.csv".format(os.path.split(path)[-1],
+                                                                                        tol[k])),
+                                  index=False)
 
-        entry = dict(exp_id=path, TP=tp, FN=fn, FP=fp,
-                     precision=tp/(tp+fp), recall=tp/(tp+fn))
+                entry = dict(exp_id=path, TP=tp[k], FN=fn[k], FP=fp[k],
+                             precision=tp[k]/(tp[k]+fp[k]), recall=tp[k]/(tp[k]+fn[k]))
 
-        df = df.append(entry, ignore_index=True)
+                global_dfs[k] = global_dfs[k].append(entry, ignore_index=True)
 
     if save_path is not None:
         if not os.path.exists(save_path):
             os.mkdir(save_path)
 
-        df.to_csv(os.path.join(save_path, 'metrics_{}.csv'.format(tol)), index=False)
+        for k in range(ntol):
+            global_dfs[k].to_csv(os.path.join(save_path, 'global_metrics_{}.csv'.format(tol[k])), index=False)
 
     if return_paths:
-        return df, path_list
+        return global_dfs, path_list
     else:
-        return df
+        return global_dfs
 
 
 def get_slices(df, col, slice_edges):
@@ -258,18 +250,18 @@ def get_metrics_per_slice(df, slices, slice_edges):
         exit(1)
 
     for i in range(nslices):
-        sub_df = df.loc[df.exp_id.isin(slices[i])]  # check
+        sub_df = df.loc[df.exp_id.isin(slices[i])]
         nb_src, nb_found, nb_recov = sub_df.nb_src.sum(), sub_df.nb_found.sum(), sub_df.nb_recov.sum()
         precision, recall = nb_recov / nb_found, nb_recov / nb_src
-
         entry = dict(nb_src=nb_src, nb_found=nb_found, nb_recov=nb_recov)
 
         # multiply by nb_recov to get slice mean
-        if distance == 'cartesian':
-            entry['recov_dist'] = (sub_df.nb_recov * sub_df.mean_recov_dist).sum() / nb_recov
-        else:
-            entry['mean_recov_radial_dist'] = (sub_df.nb_recov * sub_df.mean_recov_radial_dist).sum() / nb_recov
-            entry['mean_recov_angular_dist'] = (sub_df.nb_recov * sub_df.mean_recov_angular_dist).sum() / nb_recov
+        entry['mean_recov_dist'] = (sub_df.nb_recov * sub_df.mean_recov_dist).sum() / nb_recov
+        entry['mean_dist'] = (sub_df.nb_found * sub_df.mean_dist).sum() / nb_found
+        entry['mean_recov_radial_dist'] = (sub_df.nb_recov * sub_df.mean_recov_radial_dist).sum() / nb_recov
+        entry['mean_recov_angular_dist'] = (sub_df.nb_recov * sub_df.mean_recov_angular_dist).sum() / nb_recov
+        entry['mean_angular_dist'] = (sub_df.nb_found * sub_df.mean_angular_dist).sum() / nb_found
+        entry['mean_radial_dist'] = (sub_df.nb_found * sub_df.mean_radial_dist).sum() / nb_found
 
         entry['mean_ampl_corr'] = sub_df.ampl_corr.mean()
         entry['ampl_rel_error'] = (sub_df.nb_recov * sub_df.ampl_rel_error).sum() / nb_recov
@@ -284,11 +276,11 @@ if __name__ == "__main__":
 
     try:
         paths_d = sys.argv[1].split(",")
-        opts, args = getopt.getopt(sys.argv[2:], 'su', ['tol=', 'save_path=', 'delimiter=', 'n_plot=', 'method=',
+        opts, args = getopt.getopt(sys.argv[2:], 'su', ['tol=', 'save_path=', 'delimiter=', 'method=',
                                                         'n_src=', 'metrics_path=', 'ampl_thresh=', 'distance='])
 
     except getopt.GetoptError:
-        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--n_plot=] [--method=] [--metrics_path]"
+        print("extract_metrics.py path [--tol=] [--save_path=] [--n_src=] [--method=] [--metrics_path]"
               "[--delimiter] [--ampl_thresh=] [--distance=] [-su] \n"
               "path : path to a directory or several paths separated by commas \n"
               "--tol= : absolute tolerance \n"
@@ -309,8 +301,6 @@ if __name__ == "__main__":
               "to the image source order considered.\n"
               "--ampl_thresh= : ignores all reconstructed sources for which the amplitude is below the given "
               "threshold\n"
-              "--n_plot= : number of data points for a recall/precision curve in function "
-              "of the tolerance threshold \n"
               "-u : allow to count the True positives multiple times for a given source. If two reconstructed sources"
               "are close to a same image source, both are counted as True positives. By default, one True positive per"
               "image source is possible. This option only makes sense for computing the precision."
@@ -318,8 +308,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     save_path_d, metrics_path_d = ".", None
-    n_plot_d, show_d, method_d, delimiter_d = 0, False, "distance", np.inf
-    tol_d, n_src_d, unique_d = 1e-2, 0, True
+    method_d, delimiter_d = "distance", np.inf
+    tol_d, n_src_d, unique_d = [1e-2], 0, True
     ampl_thresh_d, dist_d = None, 'cartesian'
     for opt, arg in opts:
         if opt == '--save_path':
@@ -330,8 +320,6 @@ if __name__ == "__main__":
             tol_d = arg
         elif opt == '--n_src':
             n_src_d = int(arg)
-        elif opt == '--n_plot':
-            n_plot_d = int(arg)
         elif opt == '--method':
             method_d = arg
         elif opt == '--delimiter':
@@ -345,6 +333,6 @@ if __name__ == "__main__":
         elif opt == '-u':
             unique_d = False
 
-    get_metrics(paths_d, save_path=save_path_d, n_plot=n_plot_d, show=show_d, method=method_d, delimiter=delimiter_d,
+    get_metrics(paths_d, save_path=save_path_d, method=method_d, delimiter=delimiter_d,
                 tol=tol_d, n_src=n_src_d, unique=unique_d, reconstr_ampl_threshold=ampl_thresh_d,
                 metrics_path=metrics_path_d, distance=dist_d)
