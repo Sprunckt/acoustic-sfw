@@ -92,9 +92,6 @@ if __name__ == "__main__":
     # number of microphones considered during the spherical search
     nmic = meta_param_dict.get("nmic", None)
 
-    # patience for the reconstruction algorithm
-    patience = meta_param_dict.get("patience", 1)
-
     # peak signal to noise ration for the decorrelated noise
     psnr = meta_param_dict.get("psnr")
 
@@ -294,7 +291,7 @@ if __name__ == "__main__":
                              slide_opt=slide_opt, spike_merging=False,
                              spherical_search=spherical_search, use_hard_stop=True, verbose=True,
                              search_method=grid_method, opt_param=opt_param, nmic=nmic,
-                             early_stopping=True, plot=False, saving_param=save_var, patience=patience)
+                             early_stopping=True, plot=False, saving_param=save_var)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
