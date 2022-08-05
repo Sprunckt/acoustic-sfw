@@ -688,7 +688,7 @@ class SFW(ABC):
 
 class TimeDomainSFW(SFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-2):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-2, end_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -713,7 +713,7 @@ class TimeDomainSFW(SFW):
         self.J = self.M * N
 
         # getting attributes and methods from parent class
-        super().__init__(y=y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)
+        super().__init__(y=y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol, end_tol=end_tol)
         # full rir
         self.global_y = self.y
 
@@ -990,10 +990,10 @@ class TimeDomainSFW(SFW):
 
 class TimeDomainSFWNorm1(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=1e-2):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=1e-2, end_tol=1e-2):
         """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
         y = TimeDomainSFW(y, mic_pos, fs, N, lam, fc).y  # necessary if y if a tuple of exact amplitudes and images
-        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol)
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol, end_tol=end_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -1040,10 +1040,10 @@ class TimeDomainSFWNorm1(TimeDomainSFW):
 
 class TimeDomainSFWNorm2(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-3):
+                 fs: float, N: int, lam: float = 1e-2, fc=None, deletion_tol=5e-3, end_tol=5e-3):
         """Adds a normalization factor 1/(norm_2(gamma(psi)))."""
         y = TimeDomainSFW(y, mic_pos, fs, N, lam, fc).y
-        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol)
+        super().__init__(y=y, mic_pos=mic_pos, fs=fs, N=N, lam=lam, fc=fc, deletion_tol=deletion_tol, end_tol=end_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -1152,7 +1152,7 @@ class TimeDomainSFWNorm2(TimeDomainSFW):
 
 class EpsilonTimeDomainSFW(TimeDomainSFW):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], mic_pos: np.ndarray,
-                 fs: float, N: int, lam: float = 1e-2, eps=1e-3, fc=None):
+                 fs: float, N: int, lam: float = 1e-2, eps=1e-3, fc=None, deletion_tol=5e-2, end_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -1165,7 +1165,8 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
         """
         self.eps = eps
 
-        super().__init__(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos, fc=fc)  # getting attributes and methods from parent class
+        super().__init__(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos, fc=fc, deletion_tol=deletion_tol,
+                         end_tol=end_tol)  # getting attributes and methods from parent class
         temp_sfw = TimeDomainSFW(y=y, fs=fs, lam=lam, N=N, mic_pos=mic_pos)
         self.y = temp_sfw.y.copy()  # overwriting measures initialization
 
@@ -1207,8 +1208,8 @@ class EpsilonTimeDomainSFW(TimeDomainSFW):
 
 
 class FrequencyDomainSFW(SFW):
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int, mic_pos: np.ndarray, fs: float,
+                 lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2, end_tol=5e-2):
         """
         Args:
             -y (ndarray or tuple(ndarray, ndarray)) : measurements (shape (J,) = (N*M,)) or tuple (a,x) containing the
@@ -1236,7 +1237,7 @@ class FrequencyDomainSFW(SFW):
         self._update_rir()
 
         # getting attributes and methods from parent class
-        super().__init__(y=self.y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol)
+        super().__init__(y=self.y, fs=fs, lam=lam, N=N, fc=fc, deletion_tol=deletion_tol, end_tol=end_tol)
 
     def _update_freq(self):
         """
@@ -1408,11 +1409,11 @@ class FrequencyDomainSFW(SFW):
 class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
     """Adds a normalization factor 1/(sqrt(sum(1/dist(x, xm)**2)."""
 
-    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
+    def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int, mic_pos: np.ndarray, fs: float,
+                 lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2, end_tol=5e-2):
         y = TimeDomainSFW(y, N=N, mic_pos=mic_pos, fs=fs, lam=lam, fc=fc, deletion_tol=deletion_tol).y
         super().__init__(y=y, N=N, mic_pos=mic_pos, fs=fs, lam=lam,
-                         fc=fc, deletion_tol=deletion_tol, freq_range=freq_range)
+                         fc=fc, deletion_tol=deletion_tol, freq_range=freq_range, end_tol=end_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         # distances from the spikes contained in x to every microphone, shape (M,K), K=len(x)
@@ -1465,20 +1466,21 @@ class FrequencyDomainSFWNorm1(FrequencyDomainSFW):
 class DeconvolutionSFW(SFW):
     """Blind spikes deconvolution. Does not work correctly with current initialization, and time segmentation is not
     supported."""
-    def __init__(self, source_pos, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int,
-                 mic_pos: np.ndarray, fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2):
+    def __init__(self, source_pos, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], N: int, mic_pos: np.ndarray,
+                 fs: float, lam: float = 1e-2, freq_range=None, fc=None, deletion_tol=5e-2, end_tol=5e-2):
         self.mic_pos, self.M = mic_pos, len(mic_pos)
 
         self.extract_ind = np.triu_indices(self.M, 1)
         self.d = mic_pos.shape[1]
         self.source_pos = source_pos.copy()
         self.freq_sfw = FrequencyDomainSFW(y=y, N=N, mic_pos=mic_pos, fs=fs, fc=fc, freq_range=freq_range,
-                                           deletion_tol=deletion_tol)
+                                           deletion_tol=deletion_tol, end_tol=end_tol)
         self.Nfreq = self.freq_sfw.Nfreq
 
         self.y = -self.gamma(np.array([1.]), self.source_pos.reshape([1, 3]))
 
-        super().__init__(y=self.y, fs=fs, lam=lam, N=self.freq_sfw.Nfreq, fc=fc, deletion_tol=deletion_tol)
+        super().__init__(y=self.y, fs=fs, lam=lam, N=self.freq_sfw.Nfreq, fc=fc, deletion_tol=deletion_tol,
+                         end_tol=end_tol)
 
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
         freq_response = self.freq_sfw.gamma(a, x).reshape([self.M, self.Nfreq])
