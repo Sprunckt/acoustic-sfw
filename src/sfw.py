@@ -42,7 +42,8 @@ def sliding_window_norm(a, win_length):
 
 class SFW(ABC):
     def __init__(self, y: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], fs: float,
-                 lam: float = 1e-2, N: int = 0, fc: float = None, deletion_tol: float = 0.05):
+                 lam: float = 1e-2, N: int = 0, fc: float = None, deletion_tol: float = 0.05,
+                 end_tol: float = 0.05):
         self.fs, self.lam = fs, lam
         self.fc = fs if fc is None else fc
         self.d = 3
@@ -83,7 +84,7 @@ class SFW(ABC):
 
         self.ncores = len(os.sched_getaffinity(0))
 
-        self.deletion_tol = deletion_tol
+        self.deletion_tol, self.end_tol = deletion_tol, end_tol
 
     @abstractmethod
     def gamma(self, a: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -177,13 +178,26 @@ class SFW(ABC):
         """
         Called at algorithm definitive stop, handles ultimate sliding step/step saving
         """
+
+        # delete spikes under stop_tol
+        ind_null = np.asarray(np.abs(self.ak) < self.end_tol)
+        self.ak, self.xk = self.ak[~ind_null], self.xk[~ind_null, :]
+        self.nk = len(self.ak)
+
         if self.slide_control == 1:  # sliding once before the end
             print("Last sliding step before stopping")
+
             ini = np.concatenate([self.ak, self.xk.flatten()])
             ini_val = self._obj_slide(ini, y=self.y, n_spikes=self.nk)
             mk, nit_slide, val_fin, opti_res = self._slide_step(ini, verbose=verbose)
             if val_fin < ini_val:
                 self.ak, self.xk = mk[:self.nk], mk[self.nk:].reshape([-1, self.d])
+
+                # again, delete spikes under stop_tol
+                ind_null = np.asarray(np.abs(self.ak) < self.end_tol)
+                self.ak, self.xk = self.ak[~ind_null], self.xk[~ind_null, :]
+                self.nk = len(self.ak)
+
                 if self.save:
                     self.save_list.append([self.it+1, time.time() - self.timer, self.ak, self.xk])
             else:

@@ -80,8 +80,11 @@ if __name__ == "__main__":
     ms = meta_param_dict.get("mic_size")  # array size factor
     max_order = meta_param_dict["max_order"]  # maximum order of reflections used
 
-    # amplitude threshold for deleting the spikes
+    # amplitude threshold for deleting the spikes at each iteration
     deletion_tol = meta_param_dict.get("deletion_tol", 0.05)
+
+    # amplitude threshold for deleting the spikes at the end
+    end_tol = meta_param_dict.get("end_tol", 0.05)
 
     # grid search method
     grid_method = meta_param_dict.get("grid_search", "naive")
@@ -167,7 +170,8 @@ if __name__ == "__main__":
                     "deconvolution": [DeconvolutionSFW], "frequential": [FrequencyDomainSFW, FrequencyDomainSFWNorm1],
                     "time_epsilon": [EpsilonTimeDomainSFW]}
 
-        sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam, deletion_tol=deletion_tol)
+        sfw_init_args = dict(mic_pos=mic_pos, fs=fs, fc=fc, N=N, lam=lam,
+                             deletion_tol=deletion_tol, end_tol=end_tol)
 
         if domain == "frequential":
             sfw_init_args["freq_range"] = meta_param_dict.get("freq_range")
