@@ -87,8 +87,8 @@ configuration file is created and can be manually improved/modified.
 Example: {"n_cut":10, "swap_frequency":20, "swap_factor":0.3, "method":"time"}. Cut the RIR in 10, extend to the next segment if 20 iterations have passed or
 if the residual has been reduced by a factor 0.3. Setting n_cut to 0 gets the default behavior (no segmentation). Two methods are supported: "time" which segments linearly the interval, and "energy" which does an adaptative segmentation based on the square of the signals.
 * normalization: int which specify one of the available normalization for the linear operator, 0 for default. Some features might not be implemented for other normalizations.
-* patience: keep going if the last spike is under the amplitude threshold for "patience" iterations. Stops if the patience is exhausted.
-* 
+* end_tol: amplitude threshold applied at algorithm stop (applied before and after sliding step if using the single slide method)
+
 **Additional argument "slide_opt" to control the sliding step:**
 
 Should be a dictionary containing the options for the sliding step. If None: perform a full sliding
