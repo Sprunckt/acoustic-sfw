@@ -104,7 +104,7 @@ Behavior:
         every spike (including the frozen ones).
 
 File content example that can be modified for different use cases: 
-```{"domain":"time", "max_order": 20, "fs": 16000, "fc": 16000, "rmin": 1.0, "rmax": 1.0, "dr": 0.05,"dphi": 5, "normalization": 0, "lambda": 3e-5, "ideal": true, "spherical_search": true, "mic_size": 2.0, "max_iter": 1500, "use_absorption": true, "cutoff":0.05, "start_cb":{"n_cut":10, "swap_frequency":20, "swap_factor":0.3, "method":"time"}, "slide_opt":{"method": "slide_once"}, "deletion_tol": 0.05, "patience":10, "grid_search": "naive", "opt_param":{"roughgtol":1e-4, "roughmaxiter": 100, "gtol": 1e-7}, "multiple_spheres":1, "nmic":8}```
+```{"domain":"time", "max_order": 20, "fs": 16000, "fc": 16000, "rmin": 1.0, "rmax": 1.0, "dr": 0.05,"dphi": 5, "normalization": 0, "lambda": 3e-5, "ideal": true, "spherical_search": true, "mic_size": 2.0, "max_iter": 1500, "use_absorption": true, "cutoff":0.05, "start_cb":{"n_cut":10, "swap_frequency":20, "swap_factor":0.3, "method":"time"}, "slide_opt":{"method": "slide_once"}, "deletion_tol": 0.01, "end_tol":0.1, "grid_search": "naive", "opt_param":{"roughgtol":1e-4, "roughmaxiter": 100, "gtol": 1e-7}, "multiple_spheres":1, "nmic":8}```
 
 Description: applies the noiseless time domain reconstruction of image sources, with sampling frequency 16000Hz, 2*standard array diameter.
 Corresponding initialization method: find an approximate time of arrival for each microphone, keep the 8 best values. 

@@ -336,7 +336,8 @@ class SFW(ABC):
             -niter (int): maximal number of iterations
             -max_ampl (float): upper bound on spikes amplitudes
             -min_norm (float): minimal norm allowed for the position found at the end of the grid search
-            -max_norm (float): used as bounds for the coordinates of the spike locations in each direction
+            -max_norm (float): used as bounds for the coordinates of the spike locations in each direction for the
+        sliding step
             -use_hard_stop (bool): if True, add max|etak| <= 1 as a stopping condition
             -early_stopping (bool): if True, stop at the end of an iteration if the last spike found has zero amplitude
             -search_method (str): grid search methods for the spike position search. If "rough" : perform a coarse
@@ -354,7 +355,7 @@ class SFW(ABC):
         of the residual is used to find the distance from a microphone to an image source, and applying a grid search
         on the corresponding sphere. The grid is parametrized by the grid argument. The argument nmic can be used to
         increase the number of considered microphone during the initialization.
-            -nmic (int): number of microphone considered for the spherical search (ie one sphere per microphone)
+            -nmic (int): number of microphone considered for the spherical search (ie one subgrid per microphone)
             -algo_start_cb (dict): dictionary containing the arguments passed to the algorithm start callback
             it_start_cb (dict): dictionary containing the arguments passed to the iteration start callback
             -slide_opt (dict) : dictionary containing the options for the sliding step. If None : perform a full sliding

@@ -298,5 +298,60 @@ def pos_to_dim(full_image_pos, dx=0.02, sep=1., min_wall_dist=0.5, max_room_dim=
     return dims, dists
 
 
+class CloudFourierTransform:
+    def __init__(self, positions):
+        self.positions = positions.reshape([-1, 3])
+        self.dw = None
+        self.grid = None
+        self.eval = None
+
+    def _check_grid(self):
+        if self.grid is None:
+            print("A grid has to be computed first.")
+            exit(1)
+
+    def compute_grid(self, bounds, dw=20e-2):
+        """Compute a 3D rectangular grid delimited by bounds with mesh step dw.
+        Args: -bounds (np.ndarray): a (3,2) array containing the lower and upper bounds in each direction."""
+        self.dw = dw
+        ranges = [np.arange(bounds[i, 0], bounds[i, 1], dw) for i in range(3)]
+        self.grid = np.meshgrid(*ranges)
+
+    def __call__(self, w):
+        """Evaluate the Fourier transform of the point cloud at w ((3,) or (n,3) array of
+        spatial frequencies)."""
+        if type(w) == list and len(w) == 3:
+            w = np.stack([w[i].reshape(-1) for i in range(3)], axis=-1)
+
+        return np.sum(np.exp(-2j * np.pi * np.sum(w.reshape([-1, 3])[:, np.newaxis, :] *
+                                                  self.positions[np.newaxis, :, :], axis=-1)),
+                      axis=1)
+
+    def evaluate(self):
+        """Evaluate the Fourier transform at each grid point."""
+        self._check_grid()
+        self.eval = self(self.grid)
+        return self.eval
+
+    def plot(self, t="spectrum", thresh=6.6):
+        self._check_grid()
+        if self.eval is None:
+            self.evaluate()
+
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+
+        if t == 'spectrum':
+            spec = np.abs(self.eval)
+            ind = spec > thresh
+            scat = ax.scatter(self.grid[0].reshape(-1)[ind],
+                              self.grid[1].reshape(-1)[ind],
+                              self.grid[2].reshape(-1)[ind], s=5., c=spec[ind])
+            fig.colorbar(scat)
+        elif t == 'arrow':
+            pass
+        plt.show()
+
+
 if __name__ == "__main__":
     pass

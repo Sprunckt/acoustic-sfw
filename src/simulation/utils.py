@@ -135,7 +135,7 @@ def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.nd
     return grid, sph_grid, n_per_sphere
 
 
-def create_grid_spherical_multiple(rmin, nspheres, dr, dtheta, dphi, verbose=False) -> (np.ndarray, np.ndarray, int):
+def create_grid_spherical_multiple(rmin, nspheres, dr, dtheta, dphi) -> (np.ndarray, np.ndarray, int):
     """Create a grid using spherical coordinates. Adapted from Khaoula Chahdi.
     Args:
         -rmin, rmax (float) : boundaries for the radius
