@@ -194,7 +194,12 @@ if __name__ == "__main__":
         normalization = meta_param_dict["normalization"]  # normalization used (0 for default)
 
         if ideal:  # exact theoretical observations
-            s = sf_types[domain][normalization](y=(full_ampl, full_src), **sfw_init_args)
+            if meta_param_dict.get("use_tf"):
+                measurements = TimeDomainSFW(y=(full_ampl, full_src), **sfw_init_args).y.reshape([len(mic_pos), N])
+                s = TFSFW(y=measurements, fs=fs, N=N, mic_pos=mic_pos, fc=fc, lam=lam)
+
+            else:
+                s = sf_types[domain][normalization](y=(full_ampl, full_src), **sfw_init_args)
             if domain == "frequential":
                 measurements = s.time_sfw.y
             elif domain == "deconvolution":
@@ -290,12 +295,16 @@ if __name__ == "__main__":
             save_var = (save_freq, save_var + "{}.csv".format(exp_ind))
 
         sys.stdout = open(out_path, 'w')  # redirecting stdout to capture the prints
-        a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
-                             max_ampl=200, algo_start_cb=algo_start_cb,
-                             slide_opt=slide_opt, spike_merging=False,
-                             spherical_search=spherical_search, use_hard_stop=True, verbose=True,
-                             search_method=grid_method, opt_param=opt_param, nmic=nmic,
-                             early_stopping=True, plot=False, saving_param=save_var)
+        if not meta_param_dict.get("use_tf"):
+            a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], min_norm=min_norm, max_norm=max_norm,
+                                 max_ampl=200, algo_start_cb=algo_start_cb,
+                                 slide_opt=slide_opt, spike_merging=False,
+                                 spherical_search=spherical_search, use_hard_stop=True, verbose=True,
+                                 search_method=grid_method, opt_param=opt_param, nmic=nmic,
+                                 early_stopping=True, plot=False, saving_param=save_var)
+        else:
+            a, x = s.reconstruct(grid=grid, niter=meta_param_dict["max_iter"], nmic=nmic, verbose=True,
+                                 search_method=grid_method)
 
         # reversing the coordinate change
         x = x @ inv_rot_walls.as_matrix()
