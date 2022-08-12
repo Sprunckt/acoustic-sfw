@@ -1,5 +1,18 @@
 # Gridless 3D Recovery of Image Sources from Room Impulse Responses
 
+Executed on python 3.8.10.
+
+**Package versions used:**
+    
+```matplotlib==3.4.3
+numpy==1.20.3
+optimparallel==0.1.2
+pandas==1.3.4
+pyroomacoustics==0.6.0
+scikit_learn==1.0.1
+scipy==1.7.2
+```
+
 ## 1 - Basic intructions
 
 To launch a given script, navigate to the project directory and run the script from the command line as a module.
