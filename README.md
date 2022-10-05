@@ -1,5 +1,8 @@
 # Gridless 3D Recovery of Image Sources from Room Impulse Responses
 
+![alt text](sfwb.gif)
+
+
 Executed on python 3.8.10.
 
 **Package versions used:**
