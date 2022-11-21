@@ -94,7 +94,7 @@ def create_grid(xmin, xmax, ymin, ymax, zmin, zmax, N, flat=True):
         return x, y, z
 
 
-def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.ndarray, np.ndarray, int):
+def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False, cartesian=True) -> (np.ndarray, np.ndarray, int):
     """Create a grid using spherical coordinates. Adapted from Khaoula Chahdi.
     Args:
         -rmin, rmax (float) : boundaries for the radius
@@ -120,9 +120,13 @@ def create_grid_spherical(rmin, rmax, dr, dtheta, dphi, verbose=False) -> (np.nd
         for phi in np.linspace(0, np.pi, n_phi):
             theta_range = np.linspace(0, 2 * np.pi, int(np.ceil(n_theta * np.cos(phi - np.pi / 2))), endpoint=False)
             for theta in theta_range:
-                x = r * np.cos(theta) * np.sin(phi)
-                y = r * np.sin(theta) * np.sin(phi)
-                z = r * np.cos(phi)
+                if cartesian:
+                    x = r * np.cos(theta) * np.sin(phi)
+                    y = r * np.sin(theta) * np.sin(phi)
+                    z = r * np.cos(phi)
+                else:
+                    x, y, z = r, theta, phi
+
                 grid += [x, y, z]
                 sph_grid += [r, theta, phi]
                 n += 1
@@ -187,7 +191,7 @@ def disp_measure(a, x):
     Print the measure defined by the array of amplitudes a and the array of positions x.
     """
 
-    n = len(a)
+    n = len(x)
     print("m =")
     for k in range(n - 1):
         print("{}*d_({},{},{}) +".format(a[k], *x[k]))
