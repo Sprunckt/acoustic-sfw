@@ -228,7 +228,7 @@ def get_slices(df, col, slice_edges):
     slices_indices = [[] for _ in range(nslices)]
 
     for i in range(nslices):
-        slices_indices[i] = df.exp_id.loc[(slice_edges[i] <= df[col]) & (df[col] < slice_edges[i+1])]
+        slices_indices[i] = df.exp_id.loc[(slice_edges[i] <= df[col]) & (df[col] <= slice_edges[i+1])]
 
     return slices_indices
 
@@ -270,6 +270,39 @@ def get_metrics_per_slice(df, slices, slice_edges):
         mean_df = mean_df.append(entry, ignore_index=True)
 
     return mean_df
+
+
+def aggregate_results(path, exp_names, tol, slices, edges, metric='cartesian'):
+    ntol, nexp = len(tol), len(exp_names)
+
+    aggregated_df = pd.DataFrame()
+    for i in range(ntol):
+        for j in range(nexp):
+            metrics_path = os.path.join(path, "{}_metrics_{}.csv".format(exp_names[j], str(tol[i])))
+            try:
+                df_tmp = pd.read_csv(metrics_path)
+            except FileNotFoundError:
+                print("Tolerance {} for experiment {} not found : path \n {} \n "
+                      "not found, stopping".format(tol[i], exp_names[j], metrics_path))
+                exit(1)
+
+            sliced_df = get_metrics_per_slice(df_tmp, slices, edges)
+            sliced_df["tol"] = float(tol[i]) if metric == 'cartesian' else float(tol[i][1])
+            sliced_df["exp_name"] = exp_names[j]
+            aggregated_df = aggregated_df.append(sliced_df, ignore_index=True)
+    return aggregated_df
+
+
+def compute_heatmap(aggregated_df, xcol, ycol, ccol):
+    xval = pd.unique(aggregated_df[xcol])
+    yval = pd.unique(aggregated_df[ycol])
+    heat_map = []
+    for x in xval:
+        res_x = aggregated_df.loc[aggregated_df[xcol] == x][ccol]
+
+        heat_map.append(res_x)
+
+    return xval, yval, np.array(heat_map).T
 
 
 if __name__ == "__main__":
