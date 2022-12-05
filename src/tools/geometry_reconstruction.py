@@ -1,6 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.special import expit
+from src.simulation.utils import create_grid_spherical
+from scipy.optimize import minimize
+import multiprocessing as mp
+import os
+import time
+from sklearn.cluster import MeanShift
+from abc import ABC, abstractmethod
+
 threshold = 1e-2
+ncores = len(os.sched_getaffinity(0))
 
 
 def spherical_to_cartesian(r, theta, phi):
@@ -351,6 +361,349 @@ class CloudFourierTransform:
         elif t == 'arrow':
             pass
         plt.show()
+
+
+def sigmoid_der(x):
+    return np.exp(-x) * expit(x)**2
+
+
+def mean_shift_clustering(data, bandwidth, niter=300, threshold=1, trim_factor=0.):
+    """Mean shift clustering of 1D data using sklearn's implementation. Only return the centers of the clusters
+    containing more than 'threshold' points. If trim_factor > 0, only return the clusters containing more than
+    trim_factor * max(cluster_size) points."""
+    data = data.reshape(-1, 1)
+    ms = MeanShift(bandwidth=bandwidth, bin_seeding=False, n_jobs=-1, max_iter=niter, cluster_all=False)
+    ms.fit(data)
+    cluster_size = np.bincount(ms.labels_[ms.labels_ >= 0])  # number of points in each cluster
+    ind_keep = cluster_size > threshold
+    cluster_centers, cluster_size = ms.cluster_centers_[ind_keep], cluster_size[ind_keep]
+    if len(cluster_size) == 0:
+        return np.array([]), np.array([])
+
+    if trim_factor > 0:
+        maxval = np.max(cluster_size)
+        ind_keep = cluster_size > trim_factor * maxval
+
+        if ind_keep.sum() < 3:
+            ind_keep = np.argsort(cluster_size)[-3:]
+
+    return cluster_centers[ind_keep], cluster_size[ind_keep]
+
+
+def find_dim(clusters, zero_centering=True):
+    """Find the dimensions of the room in a given direction using the coordinate clusters."""
+    sorted_centers = np.sort(clusters.flatten())
+    if zero_centering:  # use the cluster closest to 0 as reference
+        ind_inf = np.min(np.argsort(np.abs(sorted_centers))[:3])
+    else:
+        ind_inf = 0
+    diffs = sorted_centers[ind_inf+1:] - sorted_centers[ind_inf:-1]
+
+    return diffs[:2].flatten()
+
+
+def sample_sphere(n):
+    """Monte-Carlo sampling of n points uniformly on the unit sphere"""
+    p = np.random.normal(size=(n, 3))
+    return cartesian_to_spherical(p)
+
+
+class RotationFitter(ABC):
+    def __init__(self, image_pos, bvalues, center=False, scale=True):
+        self.bvalues = bvalues
+        assert len(bvalues) > 0, "No bandwidth values provided."
+
+        self.bandwidth = bvalues[0]
+
+        if center:  # recenter the coordinates of the image sources at the position of the supposed source
+            norms = np.linalg.norm(image_pos, axis=-1)
+            source_mask = np.zeros(len(norms), dtype=bool)
+            source_mask[np.argmin(norms)] = True
+            self.image_pos = image_pos[~source_mask] - image_pos[source_mask].reshape([1, -1])
+            self._dist_fun = self._dist_fun_centered
+            self._dist_fun_polar = self._dist_fun_polar_centered
+            print(self.image_pos[:2])
+        else:
+            self.image_pos = image_pos
+            self._dist_fun, self._dist_fun_polar = self._dist_fun_pairwise, self._dist_fun_polar_pairwise
+
+        if scale:
+            self.scale = np.linalg.norm(image_pos, axis=-1).reshape([-1, 1])
+            self.image_pos = image_pos.copy() / self.scale
+        else:
+            self.image_pos, self.scale = image_pos.copy(), False
+
+        self.n_src = len(self.image_pos)
+        self.image_pos_transf = cartesian_to_spherical(self.image_pos)
+        self.sin_pos, self.cos_pos = np.sin(self.image_pos_transf[:, 1:]), np.cos(self.image_pos_transf[:, 1:])
+        self.costfun_grad, self.costfun_grad2 = None, None
+
+    @abstractmethod
+    def costfun(self, u):
+        pass
+
+    @abstractmethod
+    def costfun2(self, u):
+        pass
+
+    def compute_dot_prod(self, cos_u, sin_u):
+        """Compute the dot product between u and the source positions."""
+        return (self.cos_pos[:, 0] * self.sin_pos[:, 1] * cos_u[np.newaxis, 0] * sin_u[np.newaxis, 1] +
+                self.sin_pos[:, 0] * self.sin_pos[:, 1] * sin_u[np.newaxis, 0] * sin_u[np.newaxis, 1] +
+                self.cos_pos[:, 1] * cos_u[np.newaxis, 1]) * self.image_pos_transf[:, 0]
+
+    def compute_dot_prod_polar(self, cos_u, sin_u):
+        """Compute the dot product between u and the source positions."""
+        return self.image_pos_transf[:, 0] * (cos_u*self.cos_pos + sin_u*self.sin_pos)
+
+    def _dist_fun_pairwise(self, u):
+        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))
+        return np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :])
+
+    def _dist_fun_centered(self, u):
+        return np.abs(self.compute_dot_prod(np.cos(u), np.sin(u)))
+
+    def _dist_fun_polar_pairwise(self, u):
+        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
+        return np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :])
+
+    def _dist_fun_polar_centered(self, u):
+        return np.abs(self.compute_dot_prod_polar(np.cos(u), np.sin(u)))
+
+    def fit(self, gridparam=2000, niter=10000, tol=1e-10, verbose=False, plot=False):
+        """Reconstruct the distance of the source to each wall.
+           args:-method (str): 'distance' or 'histogram' to use the distance or histogram cost function.
+                -gridparam (union(int, float)): if int, number of points to sample randomly on the unit sphere.
+           if float, the angular resolution of the grid in degrees.
+                -niter (int): number of iterations
+                -tol (float): tolerance for the stopping criterion
+                -verbose (bool): print the cost function value at each iteration
+        """
+        if isinstance(gridparam, int):
+            grid = sample_sphere(gridparam)  # sample ngrid points randomly in the unit sphere
+
+        elif isinstance(gridparam, float):
+            grid, _, _ = create_grid_spherical(1., 1., 0.1, gridparam, gridparam, cartesian=False)
+        else:
+            raise ValueError("gridparam should be an int or a float.")
+
+        room_dim = np.zeros([2, 3])
+        tstart = time.time()
+
+        p = mp.Pool(ncores)  # create a pool of workers for parallel processing
+
+        # grid search for the initial guess
+        costval = p.map(self.costfun, grid[:, 1:])
+
+        if plot:
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+            ax.view_init(2, -89)
+
+            cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
+            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
+
+            plt.colorbar(t)
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
+            ax.set_zticklabels([])
+            plt.show()
+
+        bestind = np.argmin(costval)
+        u0, initval = grid[bestind][1:], costval[bestind]
+        for k in range(len(self.bvalues)):  # loop over the decreasing bandwidth values
+            self.bandwidth = self.bvalues[k]
+            initval = self.costfun(u0)
+            res = minimize(self.costfun, u0, method='BFGS', jac=self.costfun_grad,
+                           options={'gtol': tol, 'maxiter': niter})
+            u0 = res.x
+            if verbose:
+                print("Minimizing for bandwidth ", self.bandwidth)
+                if res.success:
+                    print("First optimization successful, converged in {} iterations".format(res.nit))
+                else:
+                    print("First optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
+                print("Original and final cost function values: {} and {}".format(initval, res.fun))
+
+        basis = [spherical_to_cartesian(1, res.x[0], res.x[1])]
+
+        # compute coordinates in an arbitrary basis of the normal plane
+        rand_gen = np.random.RandomState(0)
+        # uniform random vector in the plane
+        vec2 = rand_gen.normal(0, 1, size=3)
+        vec2 /= np.linalg.norm(vec2)
+        vec2 -= np.dot(vec2, basis[0]) * basis[0]  # project on the plane
+        vec3 = np.cross(basis[0], vec2)  # vec2, vec3 is an orthonormal basis of the plane with normal basis[0]
+        # project the image sources on vec2, vec3
+        self.image_pos_transf = np.stack([np.dot(self.image_pos, vec2), np.dot(self.image_pos, vec3)], axis=-1)
+
+        # convert to polar coordinates
+        self.image_pos_transf = np.concatenate([np.linalg.norm(self.image_pos_transf, axis=1)[:, np.newaxis],
+                                                np.arctan2(self.image_pos_transf[:, 1],
+                                                           self.image_pos_transf[:, 0])[:, np.newaxis]], axis=1)
+        self.cos_pos = np.cos(self.image_pos_transf[:, 1])
+        self.sin_pos = np.sin(self.image_pos_transf[:, 1])
+
+        # grid search for the initial guess
+        grid = np.linspace(0, 2 * np.pi, 3000)
+        self.bandwidth = self.bvalues[0]
+        costval = p.map(self.costfun2, grid)
+        p.close()
+
+        if plot:
+            plt.plot(costval)
+            plt.show()
+
+        bestind = np.argmin(costval)
+        u0 = grid[bestind]
+        for k in range(len(self.bvalues)):  # loop over the decreasing bandwidth values
+            self.bandwidth = self.bvalues[k]
+            initval = self.costfun2(u0)
+            res = minimize(self.costfun2, u0, method='BFGS', jac=self.costfun_grad2,
+                           options={'gtol': tol, 'maxiter': niter})
+            u0 = res.x
+            if verbose:
+                if res.success:
+                    print("Second optimization successful, converged in {} iterations".format(res.nit))
+                else:
+                    print("Second optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
+                print("Original and final cost function values: {} and {}".format(initval, res.fun))
+
+        basis.append(np.cos(res.x)*vec2 + np.sin(res.x)*vec3)
+        basis[1] /= np.linalg.norm(basis[1])
+
+        # basis.append(rot.inv().apply(np.array([np.cos(res.x[0]), np.sin(res.x[0]), 0.])))
+        basis.append(np.cross(basis[0], basis[1]))
+        basis = np.stack(basis, axis=0)
+
+        # find the room dimensions
+        for i in range(3):
+            x = np.sum(self.image_pos * basis[i][np.newaxis, :] * self.scale, axis=1)   # pb scale
+
+            clusters, cluster_size = mean_shift_clustering(x, 0.5, threshold=1, trim_factor=1/3.)
+            if plot:
+                plt.hist(x, bins=100)
+                plt.plot(clusters, cluster_size, 'o')
+                plt.show()
+            if len(clusters) > 0:
+                room_dim[:, i] = find_dim(clusters)
+            else:
+                room_dim[:, i] = np.nan
+        tend = time.time()
+        if verbose:
+            print("Total time: {}".format(tend - tstart))
+
+        return room_dim / 2., basis
+
+
+class KernelFitter(RotationFitter):
+    def __init__(self, image_pos, bandwidth_values, kernel='gaussian', center=False, scale=True):
+        super().__init__(image_pos, bandwidth_values, center=center, scale=scale)
+        self.kernel, self.kernel_grad = self.get_kernel(kernel)
+
+    def gaussian_kernel(self, x):
+        return -np.exp(- x ** 2 / 2 / self.bandwidth ** 2)
+
+    def gaussian_kernel_grad(self, x):
+        return x * np.exp(-x ** 2 / 2 / self.bandwidth ** 2) / self.bandwidth ** 2
+
+    def gaussian_non_square_kernel(self, x):
+        return -np.exp(- np.abs(x) / self.bandwidth)
+
+    def inverse_kernel(self, x):
+        return -1 / (1 + x ** 2 / self.bandwidth ** 2)
+
+    def inverse_kernel_grad(self, x):
+        return 2 * x / (1 + x ** 2 / self.bandwidth ** 2) ** 2 / self.bandwidth ** 2
+
+    def get_kernel(self, kernel):
+        if kernel == 'gaussian':
+            return self.gaussian_kernel, self.gaussian_kernel_grad
+        elif kernel == 'inverse':
+            return self.inverse_kernel, self.inverse_kernel_grad
+        elif kernel == 'gaussian_non_square':
+            return self.gaussian_non_square_kernel, None
+        else:
+            raise ValueError("Kernel not recognized")
+
+    def costfun(self, u):
+        """Return the cost function value for a given u."""
+        return np.sum(self.kernel(self._dist_fun(u)))/self.n_src
+
+    def costfun2(self, u):
+        """Return the cost function value for a given u (second step in polar coordinates)."""
+        return np.sum(self.kernel(self._dist_fun_polar(u)))/self.n_src
+
+
+class HistogramFitter(RotationFitter):
+    def __init__(self, image_pos, nbins, bandwidth_values, center=False, scale=True):
+        super().__init__(image_pos, bandwidth_values, center=center, scale=scale)
+
+        # bin parametrization
+        self.nbins, self.bin_width = nbins, 2 / nbins
+        self.bin_centers = -1. + (np.arange(nbins) + 0.5) * self.bin_width
+
+    def histo_proba(self, x):
+        """Return the vector of length len(bin_centers) giving the probability for data sampled in x to be in each
+        bin."""
+        return np.sum(expit((x[np.newaxis, :] - self.bin_centers[:, np.newaxis] + self.bin_width/2.) / self.bandwidth) -
+                      expit((x[np.newaxis, :] - self.bin_centers[:, np.newaxis] - self.bin_width/2.) / self.bandwidth),
+                      axis=1) / self.nbins
+
+    def histo_proba_grad(self, dot_prod, cos_u, sin_u):
+        # final shape: (n_sources, n_bins, 2)
+        return np.sum(self.image_pos_transf[:, np.newaxis, np.newaxis, 0] *  # radius, shape: (n_sources,)
+                      np.concatenate([self.sin_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
+                                      cos_u[np.newaxis, 0]*sin_u[np.newaxis, 1] -
+
+                                      sin_u[np.newaxis, 0]*sin_u[np.newaxis, 1] *
+                                      self.cos_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1],
+
+                                      self.cos_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
+                                      cos_u[np.newaxis, 0]*cos_u[np.newaxis, 1] +
+
+                                      self.sin_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
+                                      sin_u[np.newaxis, 0]*cos_u[np.newaxis, 1] -   # concat shape (n_sources, 2)
+                                      self.cos_pos[:, np.newaxis, 1]*sin_u[np.newaxis, 1]], axis=-1)[:, np.newaxis, :] *
+                      (sigmoid_der((dot_prod[:, np.newaxis, np.newaxis] - self.bin_centers[np.newaxis, :, np.newaxis] + self.bin_width / 2.)
+                                   / self.bandwidth) -
+                       sigmoid_der((dot_prod[:, np.newaxis, np.newaxis] - self.bin_centers[np.newaxis, :, np.newaxis] - self.bin_width / 2.)
+                                   / self.bandwidth)),
+                      axis=0) / self.nbins / self.bandwidth
+
+    def histo_proba_grad2(self, dot_prod, cos_u, sin_u):
+        # final shape: (n_sources, n_bins)
+        return np.sum(self.image_pos_transf[:, np.newaxis, 0] *  # radius, shape: (n_sources,)
+                      (cos_u*self.sin_pos[:, np.newaxis] - self.cos_pos[:, np.newaxis]*sin_u) *
+                      (sigmoid_der((dot_prod[:, np.newaxis] - self.bin_centers[np.newaxis, :] + self.bin_width / 2.)
+                                   / self.bandwidth) -
+                       sigmoid_der((dot_prod[:, np.newaxis] - self.bin_centers[np.newaxis, :] - self.bin_width / 2.)
+                                   / self.bandwidth)),
+                      axis=0) / self.nbins / self.bandwidth
+
+    def costfun(self, u):
+        """Return the cost function value for a given u."""
+        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))  # dot products between u and the source positions
+        proba = self.histo_proba(dot_prod)
+        return - np.sum(proba*np.log(proba+1e-16))
+
+    def costfun_grad(self, u):
+        cos_u, sin_u = np.cos(u), np.sin(u)
+        dot_prod = self.compute_dot_prod(cos_u, sin_u)  # dot products between u and the source positions
+        return -np.sum(self.histo_proba_grad(dot_prod, cos_u, sin_u) *
+                       (1 + np.log(1e-16+self.histo_proba(dot_prod))[:, np.newaxis]), axis=0)
+
+    def costfun2(self, u):
+        """Return the cost function value for a given u (second step in polar coordinates)."""
+        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
+        proba = self.histo_proba(dot_prod)
+        return - np.sum(proba*np.log(proba+1e-16))
+
+    def costfun_grad2(self, u):
+        cos_u, sin_u = np.cos(u), np.sin(u)
+        dot_prod = self.compute_dot_prod_polar(cos_u, sin_u)
+        return -np.sum(self.histo_proba_grad2(dot_prod, cos_u, sin_u) *
+                       (1 + np.log(1e-16+self.histo_proba(dot_prod))))
 
 
 if __name__ == "__main__":
