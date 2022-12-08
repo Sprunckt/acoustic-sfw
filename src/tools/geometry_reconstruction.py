@@ -409,7 +409,7 @@ def sample_sphere(n):
 
 
 class RotationFitter(ABC):
-    def __init__(self, image_pos, bvalues, center=False, scale=True):
+    def __init__(self, image_pos, bvalues, center=False, global_scaling=False, individual_scaling=True):
         self.bvalues = bvalues
         assert len(bvalues) > 0, "No bandwidth values provided."
 
@@ -422,21 +422,35 @@ class RotationFitter(ABC):
             self.image_pos = image_pos[~source_mask] - image_pos[source_mask].reshape([1, -1])
             self._dist_fun = self._dist_fun_centered
             self._dist_fun_polar = self._dist_fun_polar_centered
-            print(self.image_pos[:2])
         else:
             self.image_pos = image_pos
             self._dist_fun, self._dist_fun_polar = self._dist_fun_pairwise, self._dist_fun_polar_pairwise
 
-        if scale:
-            self.scale = np.linalg.norm(image_pos, axis=-1).reshape([-1, 1])
-            self.image_pos = image_pos.copy() / self.scale
+        if global_scaling:
+            self.scale = np.max(np.linalg.norm(self.image_pos, axis=-1).reshape([-1, 1]))
+            self.image_pos = self.image_pos.copy() / self.scale
         else:
-            self.image_pos, self.scale = image_pos.copy(), False
+            self.image_pos, self.scale = self.image_pos.copy(), 1.
+
+        self.pairwise_distances = np.linalg.norm(
+            self.image_pos[:, np.newaxis, :] - self.image_pos[np.newaxis, :, :], axis=-1)
+
+        if individual_scaling:
+            self.pairwise_distances[self.pairwise_distances == 0.] = 1.
+            self._scaling_fun = self._scaling_dist_fun
+        else:
+            self._scaling_fun = self._scaling_id_fun
 
         self.n_src = len(self.image_pos)
         self.image_pos_transf = cartesian_to_spherical(self.image_pos)
         self.sin_pos, self.cos_pos = np.sin(self.image_pos_transf[:, 1:]), np.cos(self.image_pos_transf[:, 1:])
         self.costfun_grad, self.costfun_grad2 = None, None
+
+    def _scaling_id_fun(self, x):
+        return x
+
+    def _scaling_dist_fun(self, x):
+        return x / self.pairwise_distances
 
     @abstractmethod
     def costfun(self, u):
@@ -458,7 +472,7 @@ class RotationFitter(ABC):
 
     def _dist_fun_pairwise(self, u):
         dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))
-        return np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :])
+        return self._scaling_fun(np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :]))
 
     def _dist_fun_centered(self, u):
         return np.abs(self.compute_dot_prod(np.cos(u), np.sin(u)))
@@ -597,8 +611,10 @@ class RotationFitter(ABC):
 
 
 class KernelFitter(RotationFitter):
-    def __init__(self, image_pos, bandwidth_values, kernel='gaussian', center=False, scale=True):
-        super().__init__(image_pos, bandwidth_values, center=center, scale=scale)
+    def __init__(self, image_pos, bandwidth_values, kernel='gaussian', center=False,
+                 global_scaling=False, individual_scaling=True):
+        super().__init__(image_pos, bandwidth_values, center=center,
+                         global_scaling=global_scaling, individual_scaling=individual_scaling)
         self.kernel, self.kernel_grad = self.get_kernel(kernel)
 
     def gaussian_kernel(self, x):
@@ -636,8 +652,9 @@ class KernelFitter(RotationFitter):
 
 
 class HistogramFitter(RotationFitter):
-    def __init__(self, image_pos, nbins, bandwidth_values, center=False, scale=True):
-        super().__init__(image_pos, bandwidth_values, center=center, scale=scale)
+    def __init__(self, image_pos, nbins, bandwidth_values, center=False, global_scaling=False, individual_scaling=True):
+        super().__init__(image_pos, bandwidth_values, center=center,
+                         global_scaling=global_scaling, individual_scaling=individual_scaling)
 
         # bin parametrization
         self.nbins, self.bin_width = nbins, 2 / nbins
