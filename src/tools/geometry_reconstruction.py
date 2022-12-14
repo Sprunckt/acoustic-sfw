@@ -479,7 +479,7 @@ class RotationFitter(ABC):
 
     def _dist_fun_polar_pairwise(self, u):
         dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
-        return np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :])
+        return self._scaling_fun(np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :]))
 
     def _dist_fun_polar_centered(self, u):
         return np.abs(self.compute_dot_prod_polar(np.cos(u), np.sin(u)))
@@ -498,6 +498,7 @@ class RotationFitter(ABC):
 
         elif isinstance(gridparam, float):
             grid, _, _ = create_grid_spherical(1., 1., 0.1, gridparam, gridparam, cartesian=False)
+            grid = grid[:len(grid) // 2+1, :]  # only use half of the sphere to use the central symmetry
         else:
             raise ValueError("gridparam should be an int or a float.")
 
@@ -558,8 +559,8 @@ class RotationFitter(ABC):
         self.cos_pos = np.cos(self.image_pos_transf[:, 1])
         self.sin_pos = np.sin(self.image_pos_transf[:, 1])
 
-        # grid search for the initial guess
-        grid = np.linspace(0, 2 * np.pi, 3000)
+        # grid search for the initial guess over the half circle
+        grid = np.linspace(0, np.pi, 3000)
         self.bandwidth = self.bvalues[0]
         costval = p.map(self.costfun2, grid)
         p.close()
