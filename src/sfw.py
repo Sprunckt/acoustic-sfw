@@ -116,9 +116,9 @@ class SFW(ABC):
         Regression model used for amplitude optimization (LASSO if lambda > 0).
         """
         if self.lam > 0:
-            return Lasso(positive=True, alpha=self.lam)
+            return Lasso(positive=True, alpha=self.lam, fit_intercept=False)
         else:
-            return LinearRegression(positive=True)
+            return LinearRegression(positive=True, fit_intercept=False)
 
     def _obj_lasso(self, a):
         """
@@ -1500,7 +1500,7 @@ class DeconvolutionSFW(SFW):
             [self.gamma(np.ones(1), self.xkp[i, :].reshape([-1, self.d])) for i in range(self.nk)]).T
         gamma_mat = np.concatenate([np.real(gamma_mat_cpx),
                                     np.imag(gamma_mat_cpx)], axis=0)
-        lasso_fitter = Lasso(alpha=self.lam, positive=True)
+        lasso_fitter = self._get_amplitude_fitter()
         target_cpx = self.y
         target = np.concatenate([np.real(target_cpx), np.imag(target_cpx)]).reshape(-1, 1)
         scale = np.sqrt(len(gamma_mat))  # rescaling factor for sklearn convention
