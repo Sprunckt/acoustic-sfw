@@ -117,7 +117,7 @@ def find_order1(image_pos):
     """
     norms = np.linalg.norm(image_pos, axis=1)
     min_dist_ind = np.argmin(norms)
-    source_pos = image_pos[min_dist_ind]
+    source_pos = image_pos[min_dist_ind]  # find the source position as the closest source from the microphone
     image_sources = image_pos[np.arange(len(image_pos)) != min_dist_ind]  # image sources (removed the source)
     n_image_src = len(image_sources)
     dist = np.linalg.norm(source_pos[np.newaxis, :] - image_sources, axis=1)  # distances to source
@@ -125,7 +125,7 @@ def find_order1(image_pos):
     wall_pos = np.empty([6, 3], dtype=float)
     sorted_dist_ind = np.argsort(dist)
 
-    closest_src = image_sources[sorted_dist_ind[0]]  # image source that is closest to the source
+    closest_src = image_sources[sorted_dist_ind[0]]  # image source that is closest to the source (should be order 1)
     order1[0] = closest_src
     wall_pos[0] = (closest_src + source_pos) / 2.
     normal_vect, origins = np.zeros((6, 3)),  np.zeros(6)
@@ -136,7 +136,7 @@ def find_order1(image_pos):
     while it_dist < n_image_src and nb_found < 6:  # loop over the image sources until an order 1 is found
         found = True
         curr_source = image_sources[sorted_dist_ind[it_dist]]
-        for k in range(nb_found):  # check if the point is in the same half-space as another order1 source
+        for k in range(nb_found):  # check if the point is in the same half-space as another order 1 source
             if same_half_space(order1[k], curr_source, normal_vect[k], origins[k]):
                 found = False
                 break
@@ -148,7 +148,7 @@ def find_order1(image_pos):
             nb_found += 1
 
         it_dist += 1
-    return order1[:nb_found], wall_pos[:nb_found]
+    return order1[:nb_found], wall_pos[:nb_found], source_pos
 
 
 def hough_transform(image_pos, dphi, dtheta, thresh):
@@ -308,61 +308,6 @@ def pos_to_dim(full_image_pos, dx=0.02, sep=1., min_wall_dist=0.5, max_room_dim=
     return dims, dists
 
 
-class CloudFourierTransform:
-    def __init__(self, positions):
-        self.positions = positions.reshape([-1, 3])
-        self.dw = None
-        self.grid = None
-        self.eval = None
-
-    def _check_grid(self):
-        if self.grid is None:
-            print("A grid has to be computed first.")
-            exit(1)
-
-    def compute_grid(self, bounds, dw=20e-2):
-        """Compute a 3D rectangular grid delimited by bounds with mesh step dw.
-        Args: -bounds (np.ndarray): a (3,2) array containing the lower and upper bounds in each direction."""
-        self.dw = dw
-        ranges = [np.arange(bounds[i, 0], bounds[i, 1], dw) for i in range(3)]
-        self.grid = np.meshgrid(*ranges)
-
-    def __call__(self, w):
-        """Evaluate the Fourier transform of the point cloud at w ((3,) or (n,3) array of
-        spatial frequencies)."""
-        if type(w) == list and len(w) == 3:
-            w = np.stack([w[i].reshape(-1) for i in range(3)], axis=-1)
-
-        return np.sum(np.exp(-2j * np.pi * np.sum(w.reshape([-1, 3])[:, np.newaxis, :] *
-                                                  self.positions[np.newaxis, :, :], axis=-1)),
-                      axis=1)
-
-    def evaluate(self):
-        """Evaluate the Fourier transform at each grid point."""
-        self._check_grid()
-        self.eval = self(self.grid)
-        return self.eval
-
-    def plot(self, t="spectrum", thresh=6.6):
-        self._check_grid()
-        if self.eval is None:
-            self.evaluate()
-
-        fig = plt.figure()
-        ax = fig.add_subplot(projection='3d')
-
-        if t == 'spectrum':
-            spec = np.abs(self.eval)
-            ind = spec > thresh
-            scat = ax.scatter(self.grid[0].reshape(-1)[ind],
-                              self.grid[1].reshape(-1)[ind],
-                              self.grid[2].reshape(-1)[ind], s=5., c=spec[ind])
-            fig.colorbar(scat)
-        elif t == 'arrow':
-            pass
-        plt.show()
-
-
 def sigmoid_der(x):
     return np.exp(-x) * expit(x)**2
 
@@ -409,48 +354,15 @@ def sample_sphere(n):
 
 
 class RotationFitter(ABC):
-    def __init__(self, image_pos, bvalues, center=False, global_scaling=False, individual_scaling=True):
-        self.bvalues = bvalues
-        assert len(bvalues) > 0, "No bandwidth values provided."
+    def __init__(self, image_pos):
+        self.bandwidth = 1.
+        self.image_pos = image_pos.copy()
 
-        self.bandwidth = bvalues[0]
-
-        if center:  # recenter the coordinates of the image sources at the position of the supposed source
-            norms = np.linalg.norm(image_pos, axis=-1)
-            source_mask = np.zeros(len(norms), dtype=bool)
-            source_mask[np.argmin(norms)] = True
-            self.image_pos = image_pos[~source_mask] - image_pos[source_mask].reshape([1, -1])
-            self._dist_fun = self._dist_fun_centered
-            self._dist_fun_polar = self._dist_fun_polar_centered
-        else:
-            self.image_pos = image_pos
-            self._dist_fun, self._dist_fun_polar = self._dist_fun_pairwise, self._dist_fun_polar_pairwise
-
-        if global_scaling:
-            self.scale = np.max(np.linalg.norm(self.image_pos, axis=-1).reshape([-1, 1]))
-            self.image_pos = self.image_pos.copy() / self.scale
-        else:
-            self.image_pos, self.scale = self.image_pos.copy(), 1.
-
-        self.pairwise_distances = np.linalg.norm(
-            self.image_pos[:, np.newaxis, :] - self.image_pos[np.newaxis, :, :], axis=-1)
-
-        if individual_scaling:
-            self.pairwise_distances[self.pairwise_distances == 0.] = 1.
-            self._scaling_fun = self._scaling_dist_fun
-        else:
-            self._scaling_fun = self._scaling_id_fun
-
+        self.norms = np.linalg.norm(self.image_pos, axis=-1)
         self.n_src = len(self.image_pos)
         self.image_pos_transf = cartesian_to_spherical(self.image_pos)
         self.sin_pos, self.cos_pos = np.sin(self.image_pos_transf[:, 1:]), np.cos(self.image_pos_transf[:, 1:])
         self.costfun_grad, self.costfun_grad2 = None, None
-
-    def _scaling_id_fun(self, x):
-        return x
-
-    def _scaling_dist_fun(self, x):
-        return x / self.pairwise_distances
 
     @abstractmethod
     def costfun(self, u):
@@ -470,21 +382,7 @@ class RotationFitter(ABC):
         """Compute the dot product between u and the source positions."""
         return self.image_pos_transf[:, 0] * (cos_u*self.cos_pos + sin_u*self.sin_pos)
 
-    def _dist_fun_pairwise(self, u):
-        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))
-        return self._scaling_fun(np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :]))
-
-    def _dist_fun_centered(self, u):
-        return np.abs(self.compute_dot_prod(np.cos(u), np.sin(u)))
-
-    def _dist_fun_polar_pairwise(self, u):
-        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
-        return self._scaling_fun(np.abs(dot_prod[:, np.newaxis] - dot_prod[np.newaxis, :]))
-
-    def _dist_fun_polar_centered(self, u):
-        return np.abs(self.compute_dot_prod_polar(np.cos(u), np.sin(u)))
-
-    def fit(self, gridparam=2000, niter=10000, tol=1e-10, verbose=False, plot=False):
+    def fit(self, gridparam=2000, niter=10000, tol=1e-10, bvalues=None, verbose=False, plot=False):
         """Reconstruct the distance of the source to each wall.
            args:-method (str): 'distance' or 'histogram' to use the distance or histogram cost function.
                 -gridparam (union(int, float)): if int, number of points to sample randomly on the unit sphere.
@@ -502,7 +400,13 @@ class RotationFitter(ABC):
         else:
             raise ValueError("gridparam should be an int or a float.")
 
-        room_dim = np.zeros([2, 3])
+        if bvalues is None:
+            if verbose:
+                print("Using default bandwidth value.")
+            bvalues = [1.]
+
+        self.bandwidth = bvalues[0]
+
         tstart = time.time()
 
         p = mp.Pool(ncores)  # create a pool of workers for parallel processing
@@ -526,8 +430,8 @@ class RotationFitter(ABC):
 
         bestind = np.argmin(costval)
         u0, initval = grid[bestind][1:], costval[bestind]
-        for k in range(len(self.bvalues)):  # loop over the decreasing bandwidth values
-            self.bandwidth = self.bvalues[k]
+        for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
+            self.bandwidth = bvalues[k]
             initval = self.costfun(u0)
             res = minimize(self.costfun, u0, method='BFGS', jac=self.costfun_grad,
                            options={'gtol': tol, 'maxiter': niter})
@@ -561,7 +465,7 @@ class RotationFitter(ABC):
 
         # grid search for the initial guess over the half circle
         grid = np.linspace(0, np.pi, 3000)
-        self.bandwidth = self.bvalues[0]
+        self.bandwidth = bvalues[0]
         costval = p.map(self.costfun2, grid)
         p.close()
 
@@ -571,8 +475,8 @@ class RotationFitter(ABC):
 
         bestind = np.argmin(costval)
         u0 = grid[bestind]
-        for k in range(len(self.bvalues)):  # loop over the decreasing bandwidth values
-            self.bandwidth = self.bvalues[k]
+        for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
+            self.bandwidth = bvalues[k]
             initval = self.costfun2(u0)
             res = minimize(self.costfun2, u0, method='BFGS', jac=self.costfun_grad2,
                            options={'gtol': tol, 'maxiter': niter})
@@ -591,32 +495,21 @@ class RotationFitter(ABC):
         basis.append(np.cross(basis[0], basis[1]))
         basis = np.stack(basis, axis=0)
 
-        # find the room dimensions
-        for i in range(3):
-            x = np.sum(self.image_pos * basis[i][np.newaxis, :] * self.scale, axis=1)   # pb scale
-
-            clusters, cluster_size = mean_shift_clustering(x, 0.5, threshold=1, trim_factor=1/3.)
-            if plot:
-                plt.hist(x, bins=100)
-                plt.plot(clusters, cluster_size, 'o')
-                plt.show()
-            if len(clusters) > 0:
-                room_dim[:, i] = find_dim(clusters)
-            else:
-                room_dim[:, i] = np.nan
         tend = time.time()
+
         if verbose:
             print("Total time: {}".format(tend - tstart))
 
-        return room_dim / 2., basis
+        return basis
 
 
 class KernelFitter(RotationFitter):
-    def __init__(self, image_pos, bandwidth_values, kernel='gaussian', center=False,
-                 global_scaling=False, individual_scaling=True):
-        super().__init__(image_pos, bandwidth_values, center=center,
-                         global_scaling=global_scaling, individual_scaling=individual_scaling)
+    def __init__(self, image_pos, kernel='gaussian'):
+        super().__init__(image_pos)
         self.kernel, self.kernel_grad = self.get_kernel(kernel)
+        self.pairwise_distances = np.linalg.norm(
+            self.image_pos[:, np.newaxis, :] - self.image_pos[np.newaxis, :, :], axis=-1)
+        self.pairwise_distances[self.pairwise_distances == 0.] = 1.  # avoid division by 0
 
     def gaussian_kernel(self, x):
         return -np.exp(- x ** 2 / 2 / self.bandwidth ** 2)
@@ -645,17 +538,21 @@ class KernelFitter(RotationFitter):
 
     def costfun(self, u):
         """Return the cost function value for a given u."""
-        return np.sum(self.kernel(self._dist_fun(u)))/self.n_src
+        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))
+        return np.sum(self.kernel(np.abs(dot_prod[:, np.newaxis] -
+                                         dot_prod[np.newaxis, :])/ self.pairwise_distances))/self.n_src
 
     def costfun2(self, u):
         """Return the cost function value for a given u (second step in polar coordinates)."""
-        return np.sum(self.kernel(self._dist_fun_polar(u)))/self.n_src
+        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
+        return np.sum(self.kernel(np.abs(dot_prod[:, np.newaxis] -
+                                         dot_prod[np.newaxis, :]) / self.pairwise_distances)) / self.n_src
 
 
 class HistogramFitter(RotationFitter):
-    def __init__(self, image_pos, nbins, bandwidth_values, center=False, global_scaling=False, individual_scaling=True):
-        super().__init__(image_pos, bandwidth_values, center=center,
-                         global_scaling=global_scaling, individual_scaling=individual_scaling)
+    def __init__(self, image_pos, nbins):
+        scale = np.max(np.linalg.norm(image_pos, axis=-1).reshape([-1, 1]))
+        super().__init__(image_pos / scale)
 
         # bin parametrization
         self.nbins, self.bin_width = nbins, 2 / nbins
@@ -722,6 +619,26 @@ class HistogramFitter(RotationFitter):
         dot_prod = self.compute_dot_prod_polar(cos_u, sin_u)
         return -np.sum(self.histo_proba_grad2(dot_prod, cos_u, sin_u) *
                        (1 + np.log(1e-16+self.histo_proba(dot_prod))))
+
+
+def find_dimensions(image_pos, basis, plot=False):
+    room_dim = np.zeros([2, 3])
+
+    # find the room dimensions
+    for i in range(3):
+        x = np.sum(image_pos * basis[i][np.newaxis, :], axis=1)
+
+        clusters, cluster_size = mean_shift_clustering(x, 1, threshold=1, trim_factor=1 / 3.)  # mean_shift_kneighbor(x)
+        if plot:
+            plt.hist(x, bins=100)
+            plt.plot(clusters, cluster_size, 'o')
+            plt.show()
+        if len(clusters) > 0:
+            room_dim[:, i] = find_dim(clusters)
+        else:
+            room_dim[:, i] = np.nan
+
+    return room_dim / 2.
 
 
 if __name__ == "__main__":
