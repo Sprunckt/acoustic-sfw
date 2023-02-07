@@ -425,20 +425,6 @@ class RotationFitter(ABC):
         # grid search for the initial guess
         costval = p.map(self.costfun, grid[:, 1:])
 
-        if plot:
-            fig = plt.figure()
-            ax = fig.add_subplot(projection='3d')
-            ax.view_init(2, -89)
-
-            cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
-            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
-
-            plt.colorbar(t)
-            ax.set_yticklabels([])
-            ax.set_xticklabels([])
-            ax.set_zticklabels([])
-            plt.show()
-
         bestind = np.argmin(costval)
         u0, initval = grid[bestind][1:], costval[bestind]
         for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
@@ -454,6 +440,24 @@ class RotationFitter(ABC):
                 else:
                     print("First optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
                 print("Original and final cost function values: {} and {}".format(initval, res.fun))
+
+        if plot:
+            fig = plt.figure()
+            ax = fig.add_subplot(121, projection='3d')
+            ax.view_init(2, -89)
+            cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
+            ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
+
+            ax = fig.add_subplot(122, projection='3d')
+            ax.view_init(2, -89)
+            costval = p.map(self.costfun, grid[:, 1:])
+            cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
+            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
+            plt.colorbar(t)
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
+            ax.set_zticklabels([])
+            plt.show()
 
         basis = [spherical_to_cartesian(1, res.x[0], res.x[1])]
 
@@ -475,14 +479,9 @@ class RotationFitter(ABC):
         self.sin_pos = np.sin(self.image_pos_transf[:, 1])
 
         # grid search for the initial guess over the half circle
-        grid = np.linspace(0, np.pi, 3000)
+        grid = np.linspace(0, np.pi, 4000)
         self.bandwidth = bvalues[0]
         costval = p.map(self.costfun2, grid)
-        p.close()
-
-        if plot:
-            plt.plot(costval)
-            plt.show()
 
         bestind = np.argmin(costval)
         u0 = grid[bestind]
@@ -499,6 +498,14 @@ class RotationFitter(ABC):
                     print("Second optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
                 print("Original and final cost function values: {} and {}".format(initval, res.fun))
 
+        if plot:
+            fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+            ax[0].plot(costval)
+            costval = p.map(self.costfun2, grid)
+            ax[1].plot(costval)
+            plt.show()
+
+        p.close()
         basis.append(np.cos(res.x)*vec2 + np.sin(res.x)*vec3)
         basis[1] /= np.linalg.norm(basis[1])
 
@@ -700,7 +707,6 @@ def find_dimensions(image_pos, basis, prune=0, bandwidth=1., max_dist=0.25, min_
             all_labels.append(labels)
 
         all_labels = np.array(all_labels)
-        cluster_sizes = [np.bincount(all_labels[i][all_labels[i] >= 0]) for i in range(3)]
 
         if verbose:
             if converged:
@@ -709,6 +715,8 @@ def find_dimensions(image_pos, basis, prune=0, bandwidth=1., max_dist=0.25, min_
                 print('Max number of iterations reached for pruning')
 
         print('Time for pruning: {:.2f}s'.format(time.time() - t1))
+
+    cluster_sizes = [np.bincount(all_labels[i][all_labels[i] >= 0]) for i in range(3)]
 
     if plot:
         for i in range(3):
@@ -719,17 +727,22 @@ def find_dimensions(image_pos, basis, prune=0, bandwidth=1., max_dist=0.25, min_
             plt.plot(all_clusters[i], sizes, 'o')
         plt.show()
 
-    for i in range(3):  # find the dimensions of the room in each direction
+    # approximated position of the source (order 0) using the clusters
+    src_pos_est = np.zeros(3) if src_pos is None else src_pos.copy()
+
+    for i in range(3):  # merge clusters that are too close together
         clusters, csize = all_clusters[i], cluster_sizes[i]
         nclusters = len(clusters)
-        if nclusters > 0:
+        deleted_cluster_id = []
+
+        if nclusters > 2:
             ind_sort = np.argsort(clusters.flatten())
             sorted_centers = clusters[ind_sort].flatten()  # sort the clusters
 
             csize = csize[ind_sort]  # cluster sizes
             # cluster labels identifiers
-            clusters_id = np.unique(all_labels[i])
-            clusters_id = clusters_id[clusters_id >= 0][ind_sort]  # sort clusters id according to coordinates
+            clusters_id_old = np.unique(all_labels[i])
+            clusters_id = clusters_id_old[clusters_id_old >= 0][ind_sort]  # sort clusters id according to coordinates
 
             ind_mid = np.argmin(np.abs(sorted_centers))  # use the cluster closest to 0 as reference
 
@@ -751,47 +764,64 @@ def find_dimensions(image_pos, basis, prune=0, bandwidth=1., max_dist=0.25, min_
                                                    + sorted_centers[ind_mid+1]*csize[ind_mid+1]) /
                                                    (csize[ind_mid] + csize[ind_mid+1]))
                         ind_del = ind_mid + 1
+                        # update the labels
                         all_labels[i][all_labels[i] == clusters_id[ind_mid + 1]] = clusters_id[ind_mid]
 
                     sorted_centers = np.delete(sorted_centers, ind_del)
+                    deleted_cluster_id.append(clusters_id[ind_del])
                     clusters_id = np.delete(clusters_id, ind_del)
+                    csize = np.delete(csize, ind_del)
                     nclusters -= 1
                     ind_mid = np.argmin(np.abs(sorted_centers))
 
-            if src_pos is None:  # no additional check on clusters and use only clusters for dimension recovery
-                # compute the distance between the source and the two walls in that direction using the closest clusters
-                diffs = (sorted_centers[ind_mid:ind_mid + 2] - sorted_centers[ind_mid - 1:ind_mid + 1])
-                room_dim[:, i] = diffs
-            else:
-                # center the clusters around the source position
-                sorted_centers = sorted_centers - np.dot(src_pos, basis[i])
+            # cluster sizes are not updated as they will not be reused
+            all_clusters[i] = np.delete(all_clusters[i], np.isin(clusters_id_old, deleted_cluster_id))
 
-                order1_clusters = np.stack([sorted_centers[ind_mid - 1],
-                                            sorted_centers[ind_mid + 1]])  # take the two closest clusters
+            if src_pos is None:  # get the closest source in the cluster to the cluster center and project it
+                src_pos_est += sorted_centers[ind_mid]*basis[i]
+        else:
+            print('Warning: not enough clusters found for dimension recovery')
 
-                estimated_pos = src_pos[np.newaxis, :] + basis[i][np.newaxis, :] * order1_clusters[:, np.newaxis]
+    if src_pos is None:
+        src_pos_est = image_pos[np.argmin(np.sum((image_pos - src_pos_est)**2, axis=1))]
 
-                # extract cluster id for the two opposing walls
-                cluster_inf_ind = all_labels[i] == clusters_id[ind_mid-1]
-                cluster_sup_ind = all_labels[i] == clusters_id[ind_mid+1]
+    for i in range(3):  # find the dimensions of the room in each direction
+        clusters = all_clusters[i]
+        if len(clusters) > 2:
+            ind_sort = np.argsort(clusters.flatten())
+            sorted_centers = clusters[ind_sort].flatten()  # sort the clusters
+            # cluster labels identifiers
+            clusters_id = np.unique(all_labels[i])
+            clusters_id = clusters_id[clusters_id >= 0][ind_sort]  # sort clusters id according to coordinates
+            ind_mid = np.argmin(np.abs(sorted_centers))  # use the cluster closest to 0 as reference
 
-                # find the closest sources (in the relevant clusters) to the estimated positions
-                # shape 2x(n_sources in cluster, 3)->(n_sources in cluster,)
-                dists_inf = np.sum((image_pos[np.newaxis, cluster_inf_ind, :] -
-                                    estimated_pos[0, np.newaxis, :]) ** 2, axis=-1)
-                dists_sup = np.sum((image_pos[np.newaxis, cluster_sup_ind, :] -
-                                    estimated_pos[1, np.newaxis, :]) ** 2, axis=-1)
+            # center the clusters around the source position
+            sorted_centers = sorted_centers - np.dot(src_pos_est, basis[i])
+            order1_clusters = np.stack([sorted_centers[ind_mid - 1],
+                                        sorted_centers[ind_mid + 1]])  # take the two closest clusters
 
-                closest_src = np.concatenate([image_pos[cluster_inf_ind][np.argmin(dists_inf, axis=-1)],
-                                              image_pos[cluster_sup_ind][np.argmin(dists_sup, axis=-1)]], axis=0)
+            estimated_pos = src_pos_est[np.newaxis, :] + basis[i][np.newaxis, :] * order1_clusters[:, np.newaxis]
 
-                room_dim[:, i] = np.abs(np.sum((closest_src - src_pos[np.newaxis, :]) *
-                                               basis[i][np.newaxis, :], axis=-1)).flatten()
+            # extract cluster id for the two opposing walls
+            cluster_inf_ind = all_labels[i] == clusters_id[ind_mid-1]
+            cluster_sup_ind = all_labels[i] == clusters_id[ind_mid+1]
 
+            # find the closest sources (in the relevant clusters) to the estimated positions
+            # shape 2x(n_sources in cluster, 3)->(n_sources in cluster,)
+            dists_inf = np.sum((image_pos[np.newaxis, cluster_inf_ind, :] -
+                                estimated_pos[0, np.newaxis, :]) ** 2, axis=-1)
+            dists_sup = np.sum((image_pos[np.newaxis, cluster_sup_ind, :] -
+                                estimated_pos[1, np.newaxis, :]) ** 2, axis=-1)
+
+            closest_src = np.concatenate([image_pos[cluster_inf_ind][np.argmin(dists_inf, axis=-1)],
+                                          image_pos[cluster_sup_ind][np.argmin(dists_sup, axis=-1)]], axis=0)
+
+            room_dim[:, i] = np.abs(np.sum((closest_src - src_pos_est[np.newaxis, :]) *
+                                           basis[i][np.newaxis, :], axis=-1)).flatten()
         else:
             room_dim[:, i] = np.nan
 
-    return room_dim / 2.
+    return room_dim / 2., src_pos_est
 
 
 if __name__ == "__main__":
