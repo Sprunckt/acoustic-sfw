@@ -4,7 +4,7 @@
 
 Adapted Sliding Frank-Wolfe algorithm for 3D image source recovery from room impulse responses. 
 The algorithm is described in our paper [Gridless 3D Recovery of Image Sources from Room Impulse Responses](https://hal.archives-ouvertes.fr/hal-03763838v2).
-The version of the code used in the paper is available in the main branch at commit [1356302](https://github.com/Sprunckt/acoustic-sfw/tree/135630234a8aa16a229b3fcb8500be87c8770e8c).
+The version of the code used in the paper for image source localization is available in the main branch at commit [1356302](https://github.com/Sprunckt/acoustic-sfw/tree/135630234a8aa16a229b3fcb8500be87c8770e8c).
 
 Executed on python 3.8.10.
 
@@ -21,7 +21,8 @@ scipy==1.7.2
 
 Note : A minor bug was later fixed at commit 
 [ed6a084](https://github.com/Sprunckt/acoustic-sfw/tree/ed6a084bcfe4791c5ca21fbb51872413f200cd7b)
-with a negligible impact on the reported results.
+with a negligible impact on the reported results. A bug in the case where the separation constraints in room generation 
+were different (not tested in the paper) has also been fixed and the most recent version of the code should be used.
 
 ## 1 - Basic intructions
 
