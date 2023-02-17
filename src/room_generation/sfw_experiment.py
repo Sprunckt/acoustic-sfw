@@ -72,12 +72,12 @@ while new_exp > n_generated:
     z_mic = param_dict.get("z_mic")
 
     # lower and upper bounds for the random coordinates
-    lb = param_dict["mic_wall_sep"]
+    lbmic, lbsrc = param_dict["mic_wall_sep"], param_dict["src_wall_sep"]
     ubmic = (xroom - param_dict["mic_wall_sep"], yroom - param_dict["mic_wall_sep"], zroom - param_dict["mic_wall_sep"])
     ubsrc = (xroom - param_dict["src_wall_sep"], yroom - param_dict["src_wall_sep"], zroom - param_dict["src_wall_sep"])
     fixed_src, fixed_mic = [None, None, z_src], [None, None, z_mic]
-    args_src = [(lb, ubsrc[i], fixed_src[i]) for i in range(3)]
-    args_mic = [(lb, ubmic[i], fixed_mic[i]) for i in range(3)]
+    args_src = [(lbsrc, ubsrc[i], fixed_src[i]) for i in range(3)]
+    args_mic = [(lbmic, ubmic[i], fixed_mic[i]) for i in range(3)]
 
     src_pos = np.array([choose_random(*args_src[i]) for i in range(3)])
     mic_pos = np.array([choose_random(*args_mic[i]) for i in range(3)])
