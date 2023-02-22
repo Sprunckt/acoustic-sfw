@@ -55,22 +55,27 @@ def same_half_space(x, y, normal, origin):
 def generate_src_coordinates(d1, d2, lower_bound, upper_bound):
     """Generate the coordinates of the image sources in one direction, given the distances of the source to the walls
     and bounds (assume the origin is located at the source)."""
-    d = d1 + d2
     coord_list = []
-    curr_coord, parity, k = 0, 1, 0
+    curr_coord, parity, old_coord = 0, 0, 0
     while curr_coord > lower_bound:
-        curr_coord = - 2*d*k - 2*parity*d2
+        if parity == 0:
+            curr_coord = old_coord - 2 * d1
+        else:
+            curr_coord = old_coord - 2 * d2
+        old_coord = curr_coord
         if curr_coord > lower_bound:
             coord_list.append(curr_coord)
-        k += parity
         parity = (parity + 1) % 2
 
-    curr_coord, parity, k = 0, 1, 0
+    curr_coord, parity, old_coord = 0, 0, 0
     while curr_coord < upper_bound:
-        curr_coord = 2*d*k + 2*parity*d1
+        if parity == 0:
+            curr_coord = old_coord + 2 * d2
+        else:
+            curr_coord = old_coord + 2 * d1
+        old_coord = curr_coord
         if curr_coord < upper_bound:
             coord_list.append(curr_coord)
-        k += 1*parity
         parity = (parity + 1) % 2
 
     return np.sort(coord_list)
@@ -311,28 +316,33 @@ def sigmoid_der(x):
     return np.exp(-x) * expit(x)**2
 
 
-def trim_clusters(cluster_centers, cluster_size, labels, threshold):
-    if len(cluster_size) == 0:
-        return np.array([]), np.array([])
+def trim_clusters(cluster_centers, cluster_size, labels, threshold, trim_edges=True):
+    if len(cluster_size) > 3:
+        if threshold >= 1:
+            ind_keep = cluster_size >= threshold
+        elif 0 < threshold < 1:
+            maxval = np.max(cluster_size)
+            ind_keep = cluster_size >= threshold * maxval
+        else:
+            ind_keep = np.ones(len(cluster_size), dtype=bool)
 
-    if threshold >= 1:
-        ind_keep = cluster_size > threshold
-    elif 0 < threshold < 1:
-        maxval = np.max(cluster_size)
-        ind_keep = cluster_size > threshold * maxval
-    else:
-        ind_keep = np.ones(len(cluster_size), dtype=bool)
+        if not trim_edges:
+            ind_inf, ind_sup = np.argmin(cluster_centers), np.argmax(cluster_centers)
+            if cluster_size[ind_inf] > 0:
+                ind_keep[ind_inf] = True
+            if cluster_size[ind_sup] > 0:
+                ind_keep[ind_sup] = True
 
-    if ind_keep.sum() < 3:  # keep at least 3 clusters  (greatest 3)
-        ind_keep = np.sort(np.argsort(cluster_size)[-3:])   # sort the indices of the 3 largest clusters
-    else:
-        ind_keep = np.where(ind_keep)[0]  # extract the indices of the clusters to keep
+        if ind_keep.sum() < 3:  # keep at least 3 clusters  (greatest 3)
+            ind_keep = np.sort(np.argsort(cluster_size)[-3:])   # sort the indices of the 3 largest clusters
+        else:
+            ind_keep = np.where(ind_keep)[0]  # extract the indices of the clusters to keep
 
-    cluster_centers, cluster_size = cluster_centers[ind_keep], cluster_size[ind_keep]
+        cluster_centers, cluster_size = cluster_centers[ind_keep], cluster_size[ind_keep]
 
-    # set the labels of removed clusters to -1
-    labels[np.isin(labels, ind_keep, invert=True)] = -1
-    labels, _ = reorganize_labels(labels)
+        # set the labels of removed clusters to -1
+        labels[np.isin(labels, ind_keep, invert=True)] = -1
+        labels, _ = reorganize_labels(labels)
 
     return cluster_centers, cluster_size, labels
 
@@ -347,15 +357,12 @@ def kmeans_clustering(data, niter=300, threshold=1., init=None):
     data = data.reshape(-1, 1)
 
     nstart = int((np.max(data) - np.min(data))/2) + 1 if init is None else len(init)
-    (init, n_init) = ('k-means++', 10) if init is None else ('k-means++', len(init))
+    (init, n_init) = ('k-means++', 50) if init is None else (init.reshape(-1, 1), 1)#('k-means++', 50)
     ms = KMeans(n_clusters=nstart, max_iter=niter, random_state=42, init=init, n_init=n_init)
     ms.fit(data)
     labels, cluster_centers = ms.labels_, ms.cluster_centers_
     cluster_centers = delete_empty_clusters(cluster_centers, labels)
     labels, cluster_size = reorganize_labels(labels)
-
-    if len(cluster_size) == 0:
-        return np.array([]), np.array([])
 
     cluster_centers, cluster_size, labels = trim_clusters(cluster_centers=cluster_centers,
                                                           cluster_size=cluster_size,
@@ -688,8 +695,126 @@ class HistogramFitter(RotationFitter):
                        (1 + np.log(1e-16+self.histo_proba(dot_prod))))
 
 
-def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.5,
-                    threshold=0.1, max_iter=300, src_pos=None, verbose=False, plot=False):
+def merge_clusters(clusters, cluster_sizes, labels, min_cluster_sep, method="merge", verbose=False):
+    clusters, cluster_sizes, labels = sort_clusters(clusters, cluster_sizes, labels)
+    nclusters = len(clusters)
+
+    sep = False
+    while nclusters > 3 and not sep:  # while there are more than 3 clusters and they are not separated
+        diffs = clusters[1:] - clusters[:-1]
+        if not np.all(diffs > min_cluster_sep):
+            ind_del = np.argmin(diffs)
+            if method == "merge":
+                clusters[ind_del + 1] = ((clusters[ind_del + 1] * cluster_sizes[ind_del + 1] +
+                                          clusters[ind_del] * cluster_sizes[ind_del]) /
+                                         (cluster_sizes[ind_del+1] + cluster_sizes[ind_del]))
+                cluster_sizes[ind_del+1] += cluster_sizes[ind_del]
+
+                labels[labels == ind_del] = ind_del + 1
+            elif method == 'delete':
+                if cluster_sizes[ind_del] > cluster_sizes[ind_del + 1]:
+                    ind_del = ind_del + 1
+                labels[labels == ind_del] = -1
+            else:
+                raise ValueError("Unknown method: {}".format(method))
+
+            if method == "merge" or method == "delete":
+                # update the labels
+                for j in range(ind_del+1, nclusters):
+                    labels[labels == j] = j - 1
+                if verbose:
+                    print('Merging clusters {} and {}'.format(ind_del,
+                                                              ind_del + 1))
+
+                clusters = np.delete(clusters, ind_del)
+                cluster_sizes = np.delete(cluster_sizes, ind_del)
+
+                nclusters -= 1
+
+        else:
+            sep = True
+    return clusters, cluster_sizes, labels
+
+
+def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, use_grid=True, plot=False):
+    """Given sorted clusters and the index of the center cluster, return the index of the two order 1 clusters by
+    computing a cost function for each possible pair of clusters."""
+    ind_list, scores, dist_scores = [], [], []
+    ncluster = len(clusters)
+    recentered_clusters = clusters - clusters[center_ind]
+    lb, rb = recentered_clusters[0] - tol, recentered_clusters[-1] + tol
+    if not use_grid:
+        for i in range(center_ind+1, ncluster):  # loop over the clusters after the center cluster
+            for j in range(center_ind):  # loop over the clusters before the center cluster
+                ind_list.append((j, i))
+                estimated_coord = generate_src_coordinates(np.abs(recentered_clusters[j]/2), recentered_clusters[i]/2,
+                                                           lb, rb)
+                dist = np.abs(estimated_coord[:, np.newaxis] - recentered_clusters[np.newaxis, :])
+                is_close = np.any(dist < tol, axis=1)
+                scores.append(np.sum(cluster_sizes[is_close]) - np.sum(cluster_sizes[~is_close]))
+                dist_scores.append(-np.sum(dist[is_close]))
+
+        scores, ind_list, dist_scores = np.array(scores), np.array(ind_list), np.array(dist_scores)
+    else:
+
+        if center_ind == 0:  # not enough clusters for recovery
+            return 0, 1
+        elif center_ind == ncluster-1:
+            return ncluster-2, ncluster-1
+
+        grid_right = np.linspace(np.maximum(1., (recentered_clusters[center_ind+1]-tol)/2), rb/2, 200)
+        grid_left = np.linspace(np.maximum(1., (-recentered_clusters[center_ind-1]-tol)/2), np.abs(lb)/2, 200)
+
+        for i in range(len(grid_left)):
+            for j in range(len(grid_right)):
+                ind_list.append((i, j))
+                # print(grid_left[i], grid_right[j], lb, rb)
+                estimated_coord = generate_src_coordinates(grid_left[i], grid_right[j], lb, rb)
+                if len(estimated_coord) > 0:
+                    dist = np.abs(estimated_coord[:, np.newaxis] - recentered_clusters[np.newaxis, :])
+                    # smallest distance from each cluster to the generated coordinates
+                    smallest_dist = np.min(dist, axis=0)
+                    is_close = smallest_dist < tol  # true if the cluster is close to the generated coordinates
+
+                    smallest_dist_src = np.min(dist, axis=1)  # smallest distance from src to the clusters
+                    penalization = np.sum(smallest_dist_src > tol)*cluster_sizes[center_ind]
+                    scores.append(np.sum(cluster_sizes[is_close]) - np.sum(cluster_sizes[~is_close]) - penalization)
+                    dist_scores.append(-np.sum(smallest_dist))
+                else:
+                    scores.append(-np.inf)
+                    dist_scores.append(-np.inf)
+
+    best_score_ind = np.argmax(scores)
+    scores, dist_scores = np.array(scores), np.array(dist_scores)
+    ind_best = np.where(scores == scores[best_score_ind])[0]
+    if len(ind_best) > 1:  # in case of ties, pick the one with the smallest source-cluster distances
+        ind_best = ind_best[np.argmax(dist_scores[ind_best])]
+    else:
+        ind_best = ind_best[0]
+
+    ind_best = ind_list[ind_best]
+
+    if use_grid:
+        ind_best = np.argmin(np.abs(recentered_clusters[:, np.newaxis] -
+                                    np.array([-grid_left[ind_best[0]]*2,
+                                              grid_right[ind_best[1]]*2])[np.newaxis, :]), axis=0)
+
+    if plot:
+        plt.figure()
+        plt.plot(recentered_clusters, np.zeros_like(recentered_clusters), 'o')
+        plt.plot(recentered_clusters[center_ind], 0, 'o', color='r')
+        plt.plot(recentered_clusters[[*ind_best]], np.zeros(2), 'x', color='g')
+        gen_coord = generate_src_coordinates(np.abs(recentered_clusters[ind_best[0]] / 2),
+                                             recentered_clusters[ind_best[1]] / 2, lb, rb)
+        plt.plot(gen_coord, np.zeros_like(gen_coord), 'x', color='r')
+        print('Best score: {}'.format(np.max(scores)))
+        plt.show()
+    return ind_best
+
+
+def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.5, threshold=0.1, max_iter=300,
+                    src_pos=None, merge=True, post_process=True,
+                    verbose=False, plot=False):
     """Find the dimensions of the room from the image positions and the (reconstructed) orthonormal basis of the room.
     The projections of the image positions on the basis are used to find the room dimensions by clustering on each
     axis, 'bandwidth' is the bandwidth of the clustering algorithm.
@@ -701,17 +826,17 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
     """
     room_dim = np.zeros([2, 3])
     image_pos = image_pos.copy()
-    all_clusters, all_labels, projections = [], [], []
+    image_pos_old = image_pos.copy()
+    all_clusters, all_labels, projections, cluster_sizes = [], [], [], []
+    # project the image positions on the basis, shape (3, n_sources)
+    projections = np.sum(image_pos[np.newaxis, :, :] * basis[:, np.newaxis, :], axis=2)
 
     if plot:
         fig, ax = plt.subplots(3, 3, figsize=(15, 5))
 
     for i in range(3):  # generate the clusters
-        # project the image positions on the basis
-        projections.append(np.sum(image_pos * basis[i][np.newaxis, :], axis=1))
-
         # kmeans clustering, keep all non empty clusters
-        clusters, cluster_size, labels = kmeans_clustering(projections[i], threshold=1.,
+        clusters, cluster_size, labels = kmeans_clustering(projections[i], threshold=threshold,
                                                            niter=max_iter)
         all_clusters.append(clusters.flatten())
         all_labels.append(labels)
@@ -721,10 +846,11 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
             ax[0, i].set_yticks(cluster_size)
             ax[0, i].plot(clusters, cluster_size, 'o')
 
-    projections = np.array(projections)  # shape (3, n_sources)
+    projections_old = projections.copy()
 
     old_nb_src = projections.shape[1]
     it, converged, nb_src = 0, False, old_nb_src
+    ind_keep_old = np.arange(nb_src)
     t1 = time.time()
     while it < prune and not converged:  # prune the clusters, iterate 'prune' times
         it += 1
@@ -737,6 +863,7 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
         dist = np.array(dist_list)  # shape (3, n_sources)
         # find the indices for which projection is close to a cluster, shape (n_sources,)
         ind_keep = np.all(dist, axis=0)
+        ind_keep_old = ind_keep_old[ind_keep]  # indexation of the remaining sources in the original array
 
         nb_src_new = np.sum(ind_keep)
         if nb_src == nb_src_new:  # check if stationary
@@ -747,13 +874,14 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
         projections = projections[:, ind_keep]
         image_pos = image_pos[ind_keep]
         all_clusters_old = all_clusters.copy()
-        all_clusters, all_labels = [], []
+        all_clusters, all_labels, cluster_sizes = [], [], []
         for i in range(3):  # recompute the clusters
             clusters, cluster_size, labels = kmeans_clustering(projections[i],
                                                                init=all_clusters_old[i], niter=max_iter,
                                                                threshold=threshold)
             all_clusters.append(clusters.flatten())
             all_labels.append(labels)
+            cluster_sizes.append(cluster_size)
 
     if verbose:
         if converged:
@@ -764,9 +892,6 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
         print('Time for pruning: {}s'.format(time.time() - t1))
         print("Number of sources before and after pruning: {} -> {}".format(old_nb_src, nb_src))
 
-    # recompute the sizes (the labels should be between -1 and n_clusters-1)
-    cluster_sizes = [np.bincount(all_labels[i][all_labels[i] >= 0]) for i in range(3)]
-
     if plot:
         for i in range(3):
             ax[1, i].hist(projections[i], bins=100)
@@ -776,44 +901,14 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
     # approximated position of the source (order 0) using the clusters
     src_pos_est = np.zeros(3) if src_pos is None else src_pos.copy()
     src_masks = []
-    for i in range(3):  # merge clusters that are too close together
-        all_clusters[i], cluster_sizes[i], all_labels[i] = sort_clusters(all_clusters[i],
-                                                                         cluster_sizes[i],
-                                                                         all_labels[i])
+    for i in range(3):
+        if merge:  # merge clusters that are too close together
+            all_clusters[i], cluster_sizes[i], all_labels[i] = merge_clusters(all_clusters[i], cluster_sizes[i],
+                                                                              all_labels[i], min_cluster_sep)
 
-        nclusters = len(all_clusters[i])
-
-        sep = False
-        while nclusters > 3 and not sep:  # while there are more than 3 clusters and they are not separated
-            diffs = all_clusters[i][1:] - all_clusters[i][:-1]
-            if not np.all(diffs > min_cluster_sep):
-                ind_del = np.argmin(diffs)
-                all_clusters[i][ind_del+1] = ((all_clusters[i][ind_del+1] * cluster_sizes[i][ind_del+1] +
-                                              all_clusters[i][ind_del] * cluster_sizes[i][ind_del]) /
-                                              (cluster_sizes[i][ind_del+1] + cluster_sizes[i][ind_del]))
-                cluster_sizes[i][ind_del+1] += cluster_sizes[i][ind_del]
-
-                all_labels[i][all_labels[i] == ind_del] = ind_del + 1
-
-                # update the labels
-                for j in range(ind_del+1, nclusters):
-                    all_labels[i][all_labels[i] == j] = j - 1
-
-                if verbose:
-                    print('Merging clusters {} and {}'.format(ind_del,
-                                                              ind_del + 1))
-
-                all_clusters[i] = np.delete(all_clusters[i], ind_del)
-                cluster_sizes[i] = np.delete(cluster_sizes[i], ind_del)
-                nclusters -= 1
-
-            else:
-                sep = True
-
-        all_clusters[i], cluster_sizes[i], all_labels[i] = trim_clusters(cluster_centers=all_clusters[i],
-                                                                         cluster_size=cluster_sizes[i],
-                                                                         labels=all_labels[i],
-                                                                         threshold=threshold)
+        else:
+            all_clusters[i], cluster_sizes[i], all_labels[i] = sort_clusters(all_clusters[i], cluster_sizes[i],
+                                                                             all_labels[i])
 
         if src_pos is None:  # get the closest source in the cluster to the cluster center and project it
             ind_mid = np.argmin(np.abs(all_clusters[i]))  # index might have shifted after trimming
@@ -821,6 +916,25 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
             src_masks.append(all_labels[i] == ind_mid)
         if len(all_clusters[i]) < 3:
             print('Warning: not enough clusters found for dimension recovery')
+
+    # relabel the sources using the cluster positions, keep only those that verify the distance criterion
+    all_dist_list, min_dist_list = [], []
+    for i in range(3):
+        all_dist_list.append(np.abs(projections_old[i, :, np.newaxis] -  # shape (n_sources, n_clusters)
+                                    all_clusters[i][np.newaxis, :]))
+        min_dist_list.append(np.min(all_dist_list[i], axis=1) <= max_dist)
+
+    min_dist = np.array(min_dist_list)  # shape (3, n_sources)
+
+    old_ind = np.zeros(len(image_pos_old), dtype=bool)
+    old_ind[ind_keep_old] = True
+    ind_keep = np.all(min_dist, axis=0) | old_ind
+
+    image_pos, projections = image_pos_old[ind_keep], projections_old[:, ind_keep]
+
+    for i in range(3):
+        all_labels[i] = np.argmin(all_dist_list[i][ind_keep], axis=1)
+        cluster_sizes[i] = np.bincount(all_labels[i], minlength=len(all_clusters[i]))
 
     if plot:
         for i in range(3):
@@ -834,19 +948,28 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
 
     for i in range(3):  # find the dimensions of the room in each direction
         clusters = all_clusters[i]
-        ind_mid = np.argmin(np.abs(clusters))  # use the cluster closest to 0 as reference
+
+        if src_pos is None:  # use the cluster closest to 0 as reference
+            ind_mid = np.argmin(np.abs(clusters))
+        else:  # use the cluster closest to the projection of the source position as reference
+            ind_mid = np.argmin(np.abs(clusters - np.dot(src_pos_est, basis[i])))
+
+        if post_process and len(clusters) > 2 and ind_mid > 0:  # find the best clusters to use for dimension recovery
+            ind_inf, ind_sup = compute_best_cluster(clusters, ind_mid, cluster_sizes[i], 2*max_dist, plot=plot)
+        else:
+            ind_inf, ind_sup = ind_mid - 1, ind_mid + 1
 
         if len(clusters) > 2 and 0 < ind_mid < len(clusters) - 1:
             # center the clusters around the source position
             clusters = clusters - np.dot(src_pos_est, basis[i])
-            order1_clusters = np.stack([clusters[ind_mid - 1],
-                                        clusters[ind_mid + 1]])  # take the two closest clusters
+            order1_clusters = np.stack([clusters[ind_inf],
+                                        clusters[ind_sup]])  # take the two closest clusters
 
             estimated_pos = src_pos_est[np.newaxis, :] + basis[i][np.newaxis, :] * order1_clusters[:, np.newaxis]
 
             # extract cluster mask for the two opposing walls
-            mask_inf = all_labels[i] == ind_mid - 1
-            mask_sup = all_labels[i] == ind_mid + 1
+            mask_inf = all_labels[i] == ind_inf
+            mask_sup = all_labels[i] == ind_sup
 
             # find the closest sources (in the relevant clusters) to the estimated positions
             # shape 2x(n_sources in cluster, 3)->(n_sources in cluster,)
