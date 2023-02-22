@@ -771,14 +771,25 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, use_grid=True
                 # print(grid_left[i], grid_right[j], lb, rb)
                 estimated_coord = generate_src_coordinates(grid_left[i], grid_right[j], lb, rb)
                 if len(estimated_coord) > 0:
+                    # distance from each cluster to the generated coordinates, shape (ncoord, ncluster)
                     dist = np.abs(estimated_coord[:, np.newaxis] - recentered_clusters[np.newaxis, :])
                     # smallest distance from each cluster to the generated coordinates
                     smallest_dist = np.min(dist, axis=0)
-                    is_close = smallest_dist < tol  # true if the cluster is close to the generated coordinates
+                    # true if the cluster is close to the generated coordinates
+                    cluster_close_to_src = smallest_dist < tol
+                    # penalize if a cluster is not close to any source
+                    penalization_cluster = np.sum(cluster_sizes[~cluster_close_to_src])
 
-                    smallest_dist_src = np.min(dist, axis=1)  # smallest distance from src to the clusters
-                    penalization = np.sum(smallest_dist_src > tol)*cluster_sizes[center_ind]
-                    scores.append(np.sum(cluster_sizes[is_close]) - np.sum(cluster_sizes[~is_close]) - penalization)
+                    # compute the smallest distance from each source to the clusters
+                    smallest_ind_src = np.argmin(dist, axis=1)
+                    smallest_dist_src = dist[np.arange(len(dist)), smallest_ind_src]
+                    src_close_to_cluster = np.where(smallest_dist_src < tol)[0]
+                    # count each close cluster only once for scoring
+                    close_cluster_ind = np.unique(smallest_ind_src[src_close_to_cluster])
+                    # penalize if a source is not close to any cluster
+                    penalization_src = np.sum(smallest_dist_src > tol)*cluster_sizes[center_ind]
+
+                    scores.append(np.sum(cluster_sizes[close_cluster_ind]) - penalization_cluster - penalization_src)
                     dist_scores.append(-np.sum(smallest_dist))
                 else:
                     scores.append(-np.inf)
