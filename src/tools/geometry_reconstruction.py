@@ -8,6 +8,8 @@ import os
 import time
 from sklearn.cluster import KMeans
 from abc import ABC, abstractmethod
+from src.simulation.utils import unique_matches
+
 
 ncores = len(os.sched_getaffinity(0))
 
@@ -736,89 +738,79 @@ def merge_clusters(clusters, cluster_sizes, labels, min_cluster_sep, method="mer
     return clusters, cluster_sizes, labels
 
 
-def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, use_grid=True, plot=False):
+def calc_score(args):
+    i, j, grid_left, grid_right, lb, rb, tol, center_ind, recentered_clusters, cluster_sizes, ncluster = args
+    estimated_coord = generate_src_coordinates(grid_left[i], grid_right[j], lb, rb)
+    if len(estimated_coord) > 0:
+        ind_src, ind_clusters, dists = unique_matches(estimated_coord.reshape(-1, 1),
+                                                      recentered_clusters.reshape(-1, 1))
+
+        ind_close = ind_clusters[dists < tol]
+        if center_ind in ind_close:  # don't count the center cluster
+            ind_close = ind_close[ind_close != center_ind]
+        score = np.sum(cluster_sizes[ind_close])   # clusters close to a source
+
+        ind_far = np.arange(ncluster)[~np.in1d(np.arange(ncluster), ind_close)]
+        if center_ind in ind_far:
+            ind_far = ind_far[ind_far != center_ind]
+
+        score -= np.sum(cluster_sizes[ind_far])  # penalize clusters far from a source
+        # penalize if there are sources not close to a cluster
+        score -= (len(estimated_coord) - len(ind_close))*cluster_sizes[center_ind]
+        dist_score = -np.sum(dists)
+        return i, j, score, dist_score
+    else:
+        return i, j, -np.inf, -np.inf
+
+
+def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot=False):
     """Given sorted clusters and the index of the center cluster, return the index of the two order 1 clusters by
-    computing a cost function for each possible pair of clusters."""
-    ind_list, scores, dist_scores = [], [], []
+    computing a cost function on a grid of possible order 1 source coordinates."""
     ncluster = len(clusters)
     recentered_clusters = clusters - clusters[center_ind]
     lb, rb = recentered_clusters[0] - tol, recentered_clusters[-1] + tol
-    if not use_grid:
-        for i in range(center_ind+1, ncluster):  # loop over the clusters after the center cluster
-            for j in range(center_ind):  # loop over the clusters before the center cluster
-                ind_list.append((j, i))
-                estimated_coord = generate_src_coordinates(np.abs(recentered_clusters[j]/2), recentered_clusters[i]/2,
-                                                           lb, rb)
-                dist = np.abs(estimated_coord[:, np.newaxis] - recentered_clusters[np.newaxis, :])
-                is_close = np.any(dist < tol, axis=1)
-                scores.append(np.sum(cluster_sizes[is_close]) - np.sum(cluster_sizes[~is_close]))
-                dist_scores.append(-np.sum(dist[is_close]))
 
-        scores, ind_list, dist_scores = np.array(scores), np.array(ind_list), np.array(dist_scores)
+    if center_ind == 0:  # not enough clusters for recovery
+        return 0, 1
+    elif center_ind == ncluster-1:
+        return ncluster-2, ncluster-1
+
+    lower_bound = 1#np.maximum(1., (recentered_clusters[center_ind+1]-tol)/2)
+    nright = int(np.ceil((rb/2 - lower_bound)/dx))
+    grid_right = np.linspace(1, rb/2, nright)
+    lower_bound = 1#np.maximum(1., (-recentered_clusters[center_ind-1]-tol)/2)
+    nleft = int(np.ceil((np.abs(lb)/2 - lower_bound)/dx))
+    grid_left = np.linspace(1, np.abs(lb)/2, nleft)
+    print("nleft nright", nleft, nright)
+    pool = mp.Pool(mp.cpu_count())
+    args_list = [(i, j, grid_left, grid_right, lb, rb, tol, center_ind, recentered_clusters, cluster_sizes, ncluster)
+                 for i in range(len(grid_left)) for j in range(len(grid_right))]
+    results = pool.map(calc_score, args_list)
+    results = np.array(results)
+
+    best_score_ind = np.argmax(results[:, 2])
+    best_score = results[best_score_ind, 2]
+    matches = results[results[:, 2] == best_score]
+    if len(matches) > 1:
+        best_dist_score_ind = np.argmax(matches[:, 3])
+        best_ind = (int(matches[best_dist_score_ind, 0]), int(matches[best_dist_score_ind, 1]))
     else:
+        best_ind = (int(matches[0, 0]), int(matches[0, 1]))
+    pool.close()
 
-        if center_ind == 0:  # not enough clusters for recovery
-            return 0, 1
-        elif center_ind == ncluster-1:
-            return ncluster-2, ncluster-1
-
-        grid_right = np.linspace(np.maximum(1., (recentered_clusters[center_ind+1]-tol)/2), rb/2, 200)
-        grid_left = np.linspace(np.maximum(1., (-recentered_clusters[center_ind-1]-tol)/2), np.abs(lb)/2, 200)
-
-        for i in range(len(grid_left)):
-            for j in range(len(grid_right)):
-                ind_list.append((i, j))
-                # print(grid_left[i], grid_right[j], lb, rb)
-                estimated_coord = generate_src_coordinates(grid_left[i], grid_right[j], lb, rb)
-                if len(estimated_coord) > 0:
-                    # distance from each cluster to the generated coordinates, shape (ncoord, ncluster)
-                    dist = np.abs(estimated_coord[:, np.newaxis] - recentered_clusters[np.newaxis, :])
-                    # smallest distance from each cluster to the generated coordinates
-                    smallest_dist = np.min(dist, axis=0)
-                    # true if the cluster is close to the generated coordinates
-                    cluster_close_to_src = smallest_dist < tol
-                    # penalize if a cluster is not close to any source
-                    penalization_cluster = np.sum(cluster_sizes[~cluster_close_to_src])
-
-                    # compute the smallest distance from each source to the clusters
-                    smallest_ind_src = np.argmin(dist, axis=1)
-                    smallest_dist_src = dist[np.arange(len(dist)), smallest_ind_src]
-                    src_close_to_cluster = np.where(smallest_dist_src < tol)[0]
-                    # count each close cluster only once for scoring
-                    close_cluster_ind = np.unique(smallest_ind_src[src_close_to_cluster])
-                    # penalize if a source is not close to any cluster
-                    penalization_src = np.sum(smallest_dist_src > tol)*cluster_sizes[center_ind]
-
-                    scores.append(np.sum(cluster_sizes[close_cluster_ind]) - penalization_cluster - penalization_src)
-                    dist_scores.append(-np.sum(smallest_dist))
-                else:
-                    scores.append(-np.inf)
-                    dist_scores.append(-np.inf)
-
-    best_score_ind = np.argmax(scores)
-    scores, dist_scores = np.array(scores), np.array(dist_scores)
-    ind_best = np.where(scores == scores[best_score_ind])[0]
-    if len(ind_best) > 1:  # in case of ties, pick the one with the smallest source-cluster distances
-        ind_best = ind_best[np.argmax(dist_scores[ind_best])]
-    else:
-        ind_best = ind_best[0]
-
-    ind_best = ind_list[ind_best]
-
-    if use_grid:
-        ind_best = np.argmin(np.abs(recentered_clusters[:, np.newaxis] -
-                                    np.array([-grid_left[ind_best[0]]*2,
-                                              grid_right[ind_best[1]]*2])[np.newaxis, :]), axis=0)
+    ind_best = np.argmin(np.abs(recentered_clusters[:, np.newaxis] -
+                                np.array([-grid_left[best_ind[0]]*2,
+                                          grid_right[best_ind[1]]*2])[np.newaxis, :]), axis=0)
 
     if plot:
         plt.figure()
-        plt.plot(recentered_clusters, np.zeros_like(recentered_clusters), 'o')
+        plt.plot(recentered_clusters, cluster_sizes, 'o')
         plt.plot(recentered_clusters[center_ind], 0, 'o', color='r')
         plt.plot(recentered_clusters[[*ind_best]], np.zeros(2), 'x', color='g')
         gen_coord = generate_src_coordinates(np.abs(recentered_clusters[ind_best[0]] / 2),
                                              recentered_clusters[ind_best[1]] / 2, lb, rb)
         plt.plot(gen_coord, np.zeros_like(gen_coord), 'x', color='r')
-        print('Best score: {}'.format(np.max(scores)))
+        print('Best score: {}'.format(best_score))
         plt.show()
     return ind_best
 
@@ -851,6 +843,7 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
                                                            niter=max_iter)
         all_clusters.append(clusters.flatten())
         all_labels.append(labels)
+        cluster_sizes.append(cluster_size)
 
         if plot:
             ax[0, i].hist(projections[i], bins=100)
@@ -966,7 +959,7 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
             ind_mid = np.argmin(np.abs(clusters - np.dot(src_pos_est, basis[i])))
 
         if post_process and len(clusters) > 2 and ind_mid > 0:  # find the best clusters to use for dimension recovery
-            ind_inf, ind_sup = compute_best_cluster(clusters, ind_mid, cluster_sizes[i], 2*max_dist, plot=plot)
+            ind_inf, ind_sup = compute_best_cluster(clusters, ind_mid, cluster_sizes[i], max_dist, plot=plot)
         else:
             ind_inf, ind_sup = ind_mid - 1, ind_mid + 1
 
