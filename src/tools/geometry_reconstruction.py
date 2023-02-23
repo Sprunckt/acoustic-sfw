@@ -775,13 +775,10 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot
     elif center_ind == ncluster-1:
         return ncluster-2, ncluster-1
 
-    lower_bound = 1#np.maximum(1., (recentered_clusters[center_ind+1]-tol)/2)
-    nright = int(np.ceil((rb/2 - lower_bound)/dx))
+    nright = int(np.ceil((rb/2 - 1)/dx))
     grid_right = np.linspace(1, rb/2, nright)
-    lower_bound = 1#np.maximum(1., (-recentered_clusters[center_ind-1]-tol)/2)
-    nleft = int(np.ceil((np.abs(lb)/2 - lower_bound)/dx))
+    nleft = int(np.ceil((np.abs(lb)/2 - 1)/dx))
     grid_left = np.linspace(1, np.abs(lb)/2, nleft)
-    print("nleft nright", nleft, nright)
     pool = mp.Pool(mp.cpu_count())
     args_list = [(i, j, grid_left, grid_right, lb, rb, tol, center_ind, recentered_clusters, cluster_sizes, ncluster)
                  for i in range(len(grid_left)) for j in range(len(grid_right))]
@@ -809,7 +806,10 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot
         plt.plot(recentered_clusters[[*ind_best]], np.zeros(2), 'x', color='g')
         gen_coord = generate_src_coordinates(np.abs(recentered_clusters[ind_best[0]] / 2),
                                              recentered_clusters[ind_best[1]] / 2, lb, rb)
+        gen_coord2 = generate_src_coordinates(grid_left[best_ind[0]], grid_right[best_ind[1]]
+                                              , lb, rb)
         plt.plot(gen_coord, np.zeros_like(gen_coord), 'x', color='r')
+        plt.plot(gen_coord2, np.zeros_like(gen_coord2), 'x', color='b')
         print('Best score: {}'.format(best_score))
         plt.show()
     return ind_best
