@@ -770,10 +770,8 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot
     recentered_clusters = clusters - clusters[center_ind]
     lb, rb = recentered_clusters[0] - tol, recentered_clusters[-1] + tol
 
-    if center_ind == 0:  # not enough clusters for recovery
-        return 0, 1
-    elif center_ind == ncluster-1:
-        return ncluster-2, ncluster-1
+    if center_ind == 0 or center_ind == ncluster-1 or lb > - 1 or rb < 1:  # not enough clusters for recovery
+        return np.nan, np.nan
 
     nright = int(np.ceil((rb/2 - 1)/dx))
     grid_right = np.linspace(1, rb/2, nright)
@@ -961,9 +959,12 @@ def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.
         if post_process and len(clusters) > 2 and ind_mid > 0:  # find the best clusters to use for dimension recovery
             ind_inf, ind_sup = compute_best_cluster(clusters, ind_mid, cluster_sizes[i], max_dist, plot=plot)
         else:
-            ind_inf, ind_sup = ind_mid - 1, ind_mid + 1
+            if 0 < ind_mid < len(clusters) - 1:
+                ind_inf, ind_sup = ind_mid - 1, ind_mid + 1
+            else:
+                ind_inf, ind_sup = np.nan, np.nan
 
-        if len(clusters) > 2 and 0 < ind_mid < len(clusters) - 1:
+        if len(clusters) > 2 and ind_inf is not np.nan and ind_sup is not np.nan:
             # center the clusters around the source position
             clusters = clusters - np.dot(src_pos_est, basis[i])
             order1_clusters = np.stack([clusters[ind_inf],
