@@ -813,6 +813,103 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot
     return ind_best
 
 
+def loggausspdf(X, mu, Sigma):
+    d = X.shape[0]
+    X = X - mu[:, np.newaxis]
+    U = np.linalg.cholesky(Sigma)
+    Q = np.linalg.solve(U.T, X)
+    q = np.sum(Q**2, axis=0)  # quadratic term (M distance)
+
+    c = d*np.log(2*np.pi) + 2*np.sum(np.log(np.diag(U)))  # normalization constant
+    y = -(c + q)/2
+    return y
+
+
+def logsumexp(x, axis):
+    # Compute log(sum(exp(x), dim)) while avoiding numerical underflow.
+    y = np.max(x, axis=axis, keepdims=True)
+    x = x - y
+    s = y + np.log(np.sum(np.exp(x), axis=axis, keepdims=True))
+    ind_nan = np.where(~np.isfinite(y))
+    if ind_nan[0].size > 0:
+        s[ind_nan] = y[ind_nan]
+    return s.squeeze()
+
+
+def expectation_maximization(image_pos, basis, tol=1e-6, sigma2=0.5,
+                             max_iter=300, init=None, verbose=False, plot=True):
+
+    projections = np.sum(image_pos[np.newaxis, :, :] * basis[:, np.newaxis, :], axis=2)  # shape (3, n_image)
+    n_samples = projections.shape[1]
+
+    if init is None:
+        # estimated number of clusters, shape (n_basis,)
+        mins, maxs = np.min(projections, axis=1), np.max(projections, axis=1)
+        nb_cluster = ((maxs - mins)/2).astype(int) + 1
+        means = [np.random.choice(projections[i, :], size=(nb_cluster[i],)) for i in range(3)]
+    else:
+        means = init.copy()
+        nb_cluster = np.array([len(init[i]) for i in range(3)])
+
+    if verbose:
+        print("number of clusters : ", nb_cluster)
+
+    weights = np.ones(nb_cluster) / np.prod(nb_cluster)
+    old_params, err, it = means.copy() + [sigma2], tol + 1., 0
+    while it < max_iter and err > tol:
+        if plot and it % 50 == 0:
+            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+            for i in range(3):
+                n, _, _ = ax[i].hist(projections[i, :], bins=100)
+                normalization = np.max(n)
+                ax[i].vlines(means[i], 0, normalization, color='r')
+                x = np.linspace(np.min(projections[i, :]), np.max(projections[i, :]), 100)
+                for j in range(nb_cluster[i]):
+                    ax[i].plot(x, np.exp(-np.square(x - means[i][j])/(2*sigma2**2)), color='r')
+            plt.show()
+            fig = plt.figure()
+            ax = fig.add_subplot(projection="3d")
+            xx, yy, zz = np.meshgrid(means[0], means[1], means[2])
+            ax.scatter(projections[0, :], projections[1, :], projections[2, :], marker='x', color='k', s=15., alpha=0.5)
+            im = ax.scatter(xx, yy, zz, c=weights.flatten())
+            plt.colorbar(im)
+            plt.show()
+
+        it += 1
+        # shape (n_image, n_cluster[0], n_cluster[1], n_cluster[2])
+        logprobs = np.ones((image_pos.shape[0], nb_cluster[0], nb_cluster[1], nb_cluster[2]))  # (nsrc, L1, L2, L3)
+        for i in range(nb_cluster[0]):
+            for j in range(nb_cluster[1]):
+                for k in range(nb_cluster[2]):
+                    logprobs[:, i, j, k] = (loggausspdf(projections,
+                                                        np.array([means[0][i], means[1][j], means[2][k]]),
+                                                        sigma2*np.eye(3)) +
+                                            np.log(weights[i, j, k]))
+
+        logprobs = logprobs - logsumexp(logprobs, axis=(1, 2, 3))[:, np.newaxis, np.newaxis, np.newaxis]
+        probs = np.exp(logprobs)
+
+        weights = np.mean(probs, axis=0)
+        means = [np.sum(probs*projections[0][:, np.newaxis, np.newaxis, np.newaxis], axis=(0, 2, 3)) / np.sum(probs, axis=(0, 2, 3)),
+                 np.sum(probs*projections[1][:, np.newaxis, np.newaxis, np.newaxis], axis=(0, 1, 3)) / np.sum(probs, axis=(0, 1, 3)),
+                 np.sum(probs*projections[2][:, np.newaxis, np.newaxis, np.newaxis], axis=(0, 1, 2)) / np.sum(probs, axis=(0, 1, 2))]
+
+        sigma2 = np.sum(probs*np.square(projections[0][:, np.newaxis] - means[0][np.newaxis, :])[:, :, np.newaxis, np.newaxis])
+        sigma2 += np.sum(probs*np.square(projections[1][:, np.newaxis] - means[1][np.newaxis, :])[:, np.newaxis, :, np.newaxis])
+        sigma2 += np.sum(probs*np.square(projections[2][:, np.newaxis] - means[2][np.newaxis, :])[:, np.newaxis, np.newaxis, :])
+
+        sigma2 /= 3 * n_samples
+
+        new_params = means.copy() + [sigma2]
+        err = np.sum([np.sum(np.abs(old_params[c] - new_params[c])) for c in range(4)])
+        old_params = new_params
+
+        if verbose:
+            print("iteration {}, sigma^2={}".format(it, sigma2))
+            print("error :", err)
+    return means, weights, sigma2
+
+
 def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.5, threshold=0.1, max_iter=300,
                     src_pos=None, merge=True, post_process=True,
                     verbose=False, plot=False):
