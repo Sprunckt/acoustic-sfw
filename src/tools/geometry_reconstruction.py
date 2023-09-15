@@ -2,14 +2,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import expit
 from src.simulation.utils import create_grid_spherical
-from scipy.optimize import minimize
 import multiprocessing as mp
 import os
 import time
 from sklearn.cluster import KMeans
 from abc import ABC, abstractmethod
 from src.simulation.utils import unique_matches
-
+import jax.numpy as jnp
+import jaxopt
+import jax
+from itertools import product
+from jax.config import config
+from functools import partial
+config.update("jax_debug_nans", True)  # track nan occurences
+config.update("jax_enable_x64", True)  # force float64 precision, disable for speedup
 
 ncores = len(os.sched_getaffinity(0))
 
@@ -432,18 +438,19 @@ class RotationFitter(ABC):
         self.costfun_grad, self.costfun_grad2 = None, None
 
     @abstractmethod
-    def costfun(self, u):
+    def costfun(self, u, sig):
         pass
 
     @abstractmethod
-    def costfun2(self, u):
+    def costfun2(self, u, sig):
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
     def compute_dot_prod(self, cos_u, sin_u):
         """Compute the dot product between u and the source positions."""
-        return (self.cos_pos[:, 0] * self.sin_pos[:, 1] * cos_u[np.newaxis, 0] * sin_u[np.newaxis, 1] +
-                self.sin_pos[:, 0] * self.sin_pos[:, 1] * sin_u[np.newaxis, 0] * sin_u[np.newaxis, 1] +
-                self.cos_pos[:, 1] * cos_u[np.newaxis, 1]) * self.image_pos_transf[:, 0]
+        return (self.cos_pos[:, 0] * self.sin_pos[:, 1] * cos_u[jnp.newaxis, 0] * sin_u[jnp.newaxis, 1] +
+                self.sin_pos[:, 0] * self.sin_pos[:, 1] * sin_u[jnp.newaxis, 0] * sin_u[jnp.newaxis, 1] +
+                self.cos_pos[:, 1] * cos_u[jnp.newaxis, 1]) * self.image_pos_transf[:, 0]
 
     def compute_dot_prod_polar(self, cos_u, sin_u):
         """Compute the dot product between u and the source positions."""
@@ -476,46 +483,44 @@ class RotationFitter(ABC):
 
         tstart = time.time()
 
-        p = mp.Pool(ncores)  # create a pool of workers for parallel processing
-
+        tc1 = time.time()
         # grid search for the initial guess
-        costval = p.map(self.costfun, grid[:, 1:])
+        costval = np.apply_along_axis(self.costfun, 1, grid[:, 1:], bvalues[0])
+        tc2 = time.time()
 
+        if verbose:
+            print("time for costval : ", tc2-tc1)
         bestind = np.argmin(costval)
         u0, initval = grid[bestind][1:], costval[bestind]
         for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
-            self.bandwidth = bvalues[k]
-            initval = self.costfun(u0)
-            res = minimize(self.costfun, u0, method='BFGS', jac=self.costfun_grad,
-                           options={'gtol': tol, 'maxiter': niter})
-            u0 = res.x
+            bandwidth = bvalues[k]
+            initval = self.costfun(u0, bandwidth)
+            minimizer = jaxopt.ScipyMinimize(fun=self.costfun, method='BFGS', maxiter=niter,
+                                             options={'gtol': tol})
+            res = minimizer.run(u0, bandwidth)
+            u0 = res.params
+
             if verbose:
                 print("Minimizing for bandwidth ", self.bandwidth)
-                if res.success:
-                    print("First optimization successful, converged in {} iterations".format(res.nit))
-                else:
-                    print("First optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
-                print("Original and final cost function values: {} and {}".format(initval, res.fun))
+                print("First optimization converged in {} iterations".format(res.state.iter_num))
+                print("Original and final cost function values: {} and {}".format(initval, res.state.fun_val))
 
         if plot:
-            fig = plt.figure()
-            ax = fig.add_subplot(121, projection='3d')
-            ax.view_init(2, -89)
             cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
-            ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
+
+            fig = plt.figure(figsize=(10, 5))
+            ax = fig.add_subplot(121, projection='3d')
+            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=10)
+            plt.colorbar(t)
 
             ax = fig.add_subplot(122, projection='3d')
-            ax.view_init(2, -89)
-            costval = p.map(self.costfun, grid[:, 1:])
-            cart_grid = spherical_to_cartesian(np.ones(len(grid)), grid[:, 1], grid[:, 2]).T
-            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=70)
+            costval = np.apply_along_axis(self.costfun, 1, grid[:, 1:], bandwidth)
+            t = ax.scatter(cart_grid[:, 0], cart_grid[:, 1], cart_grid[:, 2], c=np.array(costval), s=10)
             plt.colorbar(t)
-            ax.set_yticklabels([])
-            ax.set_xticklabels([])
-            ax.set_zticklabels([])
+
             plt.show()
 
-        basis = [spherical_to_cartesian(1, res.x[0], res.x[1])]
+        basis = [spherical_to_cartesian(1, res.params[0], res.params[1])]
 
         # compute coordinates in an arbitrary basis of the normal plane
         rand_gen = np.random.RandomState(0)
@@ -535,34 +540,40 @@ class RotationFitter(ABC):
         self.sin_pos = np.sin(self.image_pos_transf[:, 1])
 
         # grid search for the initial guess over the half circle
-        grid = np.linspace(0, np.pi, 4000)
+        grid = np.linspace(0, np.pi, 4000).reshape([-1, 1])
         self.bandwidth = bvalues[0]
-        costval = p.map(self.costfun2, grid)
+
+        tc1 = time.time()
+        costval = np.apply_along_axis(self.costfun2, 1, grid, bvalues[0])
+        tc2 = time.time()
+
+        if verbose:
+            print("Time for costfun2: ", tc2 - tc1)
 
         bestind = np.argmin(costval)
         u0 = grid[bestind]
         for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
-            self.bandwidth = bvalues[k]
-            initval = self.costfun2(u0)
-            res = minimize(self.costfun2, u0, method='BFGS', jac=self.costfun_grad2,
-                           options={'gtol': tol, 'maxiter': niter})
-            u0 = res.x
+            bandwidth = bvalues[k]
+            initval = self.costfun2(u0, bandwidth)
+
+            minimizer = jaxopt.ScipyMinimize(fun=self.costfun2, method='BFGS', maxiter=niter,
+                                             options={'gtol': tol})
+            res = minimizer.run(u0, bandwidth)
+
+            u0 = res.params
             if verbose:
-                if res.success:
-                    print("Second optimization successful, converged in {} iterations".format(res.nit))
-                else:
-                    print("Second optimization failed, {} iterations, reason: {}".format(res.nit, res.message))
-                print("Original and final cost function values: {} and {}".format(initval, res.fun))
+                print("Minimizing for bandwidth ", self.bandwidth)
+                print("Second optimization converged in {} iterations".format(res.state.iter_num))
+                print("Original and final cost function values: {} and {}".format(initval, res.state.fun_val))
 
         if plot:
             fig, ax = plt.subplots(1, 2, figsize=(10, 5))
             ax[0].plot(costval)
-            costval = p.map(self.costfun2, grid)
+            costval = np.apply_along_axis(self.costfun2, 1, grid, bandwidth)
             ax[1].plot(costval)
             plt.show()
 
-        p.close()
-        basis.append(np.cos(res.x)*vec2 + np.sin(res.x)*vec3)
+        basis.append(np.cos(res.params)*vec2 + np.sin(res.params)*vec3)
         basis[1] /= np.linalg.norm(basis[1])
 
         # basis.append(rot.inv().apply(np.array([np.cos(res.x[0]), np.sin(res.x[0]), 0.])))
@@ -574,127 +585,38 @@ class RotationFitter(ABC):
         if verbose:
             print("Total time: {}".format(tend - tstart))
 
+        # clear unused jax memory, slows exec down but avoid memory leak if running in a loop
+        jax.clear_backends()
+
         return basis
 
 
 class KernelFitter(RotationFitter):
-    def __init__(self, image_pos, kernel='gaussian'):
+    def __init__(self, image_pos):
         super().__init__(image_pos)
-        self.kernel, self.kernel_grad = self.get_kernel(kernel)
         self.pairwise_distances = np.linalg.norm(
             self.image_pos[:, np.newaxis, :] - self.image_pos[np.newaxis, :, :], axis=-1)
         self.pairwise_distances[self.pairwise_distances == 0.] = 1.  # avoid division by 0
 
-    def gaussian_kernel(self, x):
-        return -np.exp(- x ** 2 / 2 / self.bandwidth ** 2)
+    @partial(jax.jit, static_argnums=(0,))
+    def gaussian_kernel(self, x, sig):
+        return -jnp.exp(- x ** 2 / 2 / sig ** 2)
 
-    def gaussian_kernel_grad(self, x):
-        return x * np.exp(-x ** 2 / 2 / self.bandwidth ** 2) / self.bandwidth ** 2
-
-    def gaussian_non_square_kernel(self, x):
-        return -np.exp(- np.abs(x) / self.bandwidth)
-
-    def inverse_kernel(self, x):
-        return -1 / (1 + x ** 2 / self.bandwidth ** 2)
-
-    def inverse_kernel_grad(self, x):
-        return 2 * x / (1 + x ** 2 / self.bandwidth ** 2) ** 2 / self.bandwidth ** 2
-
-    def get_kernel(self, kernel):
-        if kernel == 'gaussian':
-            return self.gaussian_kernel, self.gaussian_kernel_grad
-        elif kernel == 'inverse':
-            return self.inverse_kernel, self.inverse_kernel_grad
-        elif kernel == 'gaussian_non_square':
-            return self.gaussian_non_square_kernel, None
-        else:
-            raise ValueError("Kernel not recognized")
-
-    def costfun(self, u):
+    @partial(jax.jit, static_argnums=(0,))
+    def costfun(self, u, sig):
         """Return the cost function value for a given u."""
-        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))
-        return np.sum(self.kernel(np.abs(dot_prod[:, np.newaxis] -
-                                         dot_prod[np.newaxis, :]) / self.pairwise_distances))/self.n_src
+        dot_prod = self.compute_dot_prod(jnp.cos(u), jnp.sin(u))
 
-    def costfun2(self, u):
+        return jnp.sum(self.gaussian_kernel(jnp.abs(dot_prod[:, jnp.newaxis] -
+                                            dot_prod[jnp.newaxis, :]) / self.pairwise_distances, sig)) / self.n_src
+
+    @partial(jax.jit, static_argnums=(0,))
+    def costfun2(self, u, sig):
         """Return the cost function value for a given u (second step in polar coordinates)."""
-        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
-        return np.sum(self.kernel(np.abs(dot_prod[:, np.newaxis] -
-                                         dot_prod[np.newaxis, :]) / self.pairwise_distances)) / self.n_src
+        dot_prod = self.compute_dot_prod_polar(jnp.cos(u), jnp.sin(u))
 
-
-class HistogramFitter(RotationFitter):
-    def __init__(self, image_pos, nbins):
-        scale = np.max(np.linalg.norm(image_pos, axis=-1).reshape([-1, 1]))
-        super().__init__(image_pos / scale)
-
-        # bin parametrization
-        self.nbins, self.bin_width = nbins, 2 / nbins
-        self.bin_centers = -1. + (np.arange(nbins) + 0.5) * self.bin_width
-
-    def histo_proba(self, x):
-        """Return the vector of length len(bin_centers) giving the probability for data sampled in x to be in each
-        bin."""
-        return np.sum(expit((x[np.newaxis, :] - self.bin_centers[:, np.newaxis] + self.bin_width/2.) / self.bandwidth) -
-                      expit((x[np.newaxis, :] - self.bin_centers[:, np.newaxis] - self.bin_width/2.) / self.bandwidth),
-                      axis=1) / self.nbins
-
-    def histo_proba_grad(self, dot_prod, cos_u, sin_u):
-        # final shape: (n_sources, n_bins, 2)
-        return np.sum(self.image_pos_transf[:, np.newaxis, np.newaxis, 0] *  # radius, shape: (n_sources,)
-                      np.concatenate([self.sin_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
-                                      cos_u[np.newaxis, 0]*sin_u[np.newaxis, 1] -
-
-                                      sin_u[np.newaxis, 0]*sin_u[np.newaxis, 1] *
-                                      self.cos_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1],
-
-                                      self.cos_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
-                                      cos_u[np.newaxis, 0]*cos_u[np.newaxis, 1] +
-
-                                      self.sin_pos[:, np.newaxis, 0]*self.sin_pos[:, np.newaxis, 1] *
-                                      sin_u[np.newaxis, 0]*cos_u[np.newaxis, 1] -   # concat shape (n_sources, 2)
-                                      self.cos_pos[:, np.newaxis, 1]*sin_u[np.newaxis, 1]], axis=-1)[:, np.newaxis, :] *
-                      (sigmoid_der((dot_prod[:, np.newaxis, np.newaxis] - self.bin_centers[np.newaxis, :, np.newaxis] +
-                                    self.bin_width / 2.)
-                                   / self.bandwidth) -
-                       sigmoid_der((dot_prod[:, np.newaxis, np.newaxis] - self.bin_centers[np.newaxis, :, np.newaxis] -
-                                    self.bin_width / 2.)
-                                   / self.bandwidth)),
-                      axis=0) / self.nbins / self.bandwidth
-
-    def histo_proba_grad2(self, dot_prod, cos_u, sin_u):
-        # final shape: (n_sources, n_bins)
-        return np.sum(self.image_pos_transf[:, np.newaxis, 0] *  # radius, shape: (n_sources,)
-                      (cos_u*self.sin_pos[:, np.newaxis] - self.cos_pos[:, np.newaxis]*sin_u) *
-                      (sigmoid_der((dot_prod[:, np.newaxis] - self.bin_centers[np.newaxis, :] + self.bin_width / 2.)
-                                   / self.bandwidth) -
-                       sigmoid_der((dot_prod[:, np.newaxis] - self.bin_centers[np.newaxis, :] - self.bin_width / 2.)
-                                   / self.bandwidth)),
-                      axis=0) / self.nbins / self.bandwidth
-
-    def costfun(self, u):
-        """Return the cost function value for a given u."""
-        dot_prod = self.compute_dot_prod(np.cos(u), np.sin(u))  # dot products between u and the source positions
-        proba = self.histo_proba(dot_prod)
-        return - np.sum(proba*np.log(proba+1e-16))
-
-    def costfun_grad(self, u):
-        cos_u, sin_u = np.cos(u), np.sin(u)
-        dot_prod = self.compute_dot_prod(cos_u, sin_u)  # dot products between u and the source positions
-        return -np.sum(self.histo_proba_grad(dot_prod, cos_u, sin_u) *
-                       (1 + np.log(1e-16+self.histo_proba(dot_prod))[:, np.newaxis]), axis=0)
-
-    def costfun2(self, u):
-        """Return the cost function value for a given u (second step in polar coordinates)."""
-        dot_prod = self.compute_dot_prod_polar(np.cos(u), np.sin(u))
-        proba = self.histo_proba(dot_prod)
-        return - np.sum(proba*np.log(proba+1e-16))
-
-    def costfun_grad2(self, u):
-        cos_u, sin_u = np.cos(u), np.sin(u)
-        dot_prod = self.compute_dot_prod_polar(cos_u, sin_u)
-        return -np.sum(self.histo_proba_grad2(dot_prod, cos_u, sin_u) *
-                       (1 + np.log(1e-16+self.histo_proba(dot_prod))))
+        return jnp.sum(self.gaussian_kernel(jnp.abs(dot_prod[:, jnp.newaxis] -
+                                            dot_prod[jnp.newaxis, :]) / self.pairwise_distances, sig)) / self.n_src
 
 
 def merge_clusters(clusters, cluster_sizes, labels, min_cluster_sep, method="merge", verbose=False):
