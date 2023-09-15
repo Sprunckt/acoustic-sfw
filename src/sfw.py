@@ -466,6 +466,14 @@ class SFW(ABC):
                 else:
                     search_grid = self._grid_initialization_function(search_method, grid, nmic, verbose=verbose)
 
+            search_grid = search_grid[np.linalg.norm(search_grid, axis=1) > min_norm]
+            if len(search_grid) == 0:
+                if self._on_stop():
+                    return self._stop()
+                else:
+                    self._it_end_cb()
+                    continue
+
             if verbose:
                 print("Starting a grid search to minimize etak, method : ", search_method)
 
@@ -849,10 +857,10 @@ class TimeDomainSFW(SFW):
     def _iteration_start_callback(self, verbose=False):
         self.swap_counter += 1
         curr_norm, thresh = self.res_norm, self.swap_factor*self.old_norm
-        threshold_reached = curr_norm < thresh  # norm criterion
+        threshold_reached = curr_norm <= thresh  # norm criterion
         max_iter_reached = self.swap_counter > self.swap_frequency
         if threshold_reached:
-            can_extend = self._extend_rir("norm criterion reached: {} < {}".format(curr_norm, thresh), verbose=verbose)
+            can_extend = self._extend_rir("norm criterion reached: {} <= {}".format(curr_norm, thresh), verbose=verbose)
         elif max_iter_reached:
             can_extend = self._extend_rir("max iteration reached", verbose=verbose)
         else:
