@@ -63,7 +63,8 @@ Some parameters given can be ignored depending on a specific experiment configur
 * origin: location of the center of the microphone array in the room
 * absorptions: dictionary containing the walls' absorption coefficients. Example: {"north": 0.07, "south": 0.10, "east": 0.28, "west": 0.16, "floor": 0.15, "ceiling": 0.02}
 * rotation_walls, rotation_mic (optional): arrays containing 3 angles for a rotation that will be applied to the microphone antenna before and after simulations in order to randomize the orientation of the antenna,
-and shuffle the coordinate referential
+and shuffle the coordinate referential. Setting the same rotation for both means the referential moves with the antenna, setting a null rotation for rotation_walls means the antenna is rotated but the coordinates remain
+expressed in the referential of the room.
 
 File content example: 
 ```{"src_pos": [2.3, 7.7, 3.1], "room_dim": [5.1, 9.6, 4.9], "origin": [1.5, 8., 1.6], "rotation_mic": [5., 56., -44.], "rotation_walls": [-98., 26., -60.], "absorptions": {"north": 0.147, "south": 0.282, "east": 0.146, "west": 0.13, "floor": 0.029, "ceiling": 0.025}}```
@@ -79,6 +80,8 @@ The absorption coefficients are chosen uniformly in [0.01, 0.3].
 * mic_size: scale factor applied to the radius of the eigenmike spherical antenna
 * src_wall_sep, mic_wall_sep: minimal distance of the source/microphone antenna center to the walls (might cause a crash when the room is too small)
 * z_src, z_mic: additional constrain to set a fixed z coordinate for the source/microphone antenna center (set to None to keep it random)
+* same_rotation (optional): boolean (true or false) to determine if the same random rotation should be generated for the
+coordinate referential and microphone array. Defaults to true.
 
 ### Simulations configuration files
 
@@ -112,6 +115,9 @@ Example: {"n_cut":10, "swap_frequency":20, "swap_factor":0.3, "method":"time"}. 
 if the residual has been reduced by a factor 0.3. Setting n_cut to 0 gets the default behavior (no segmentation). Two methods are supported: "time" which segments linearly the interval, and "energy" which does an adaptative segmentation based on the square of the signals.
 * normalization: int which specify one of the available normalization for the linear operator, 0 for default. Some features might not be implemented for other normalizations.
 * end_tol: amplitude threshold applied at algorithm stop (applied before and after sliding step if using the single slide method)
+* reverse_coordinates: boolean to determine if rot_walls inverse rotation should be applied after reconstruction (now 
+defaults to false, meaning the ground truth is expressed in the room referential and the reconstructed sources are in the array
+ referential)
 
 **Additional argument "slide_opt" to control the sliding step:**
 

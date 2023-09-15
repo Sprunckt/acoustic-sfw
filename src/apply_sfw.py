@@ -297,12 +297,11 @@ if __name__ == "__main__":
                              search_method=grid_method, opt_param=opt_param, nmic=nmic,
                              early_stopping=True, plot=False, saving_param=save_var)
 
-        # reversing the coordinate change
-        x = x @ inv_rot_walls.as_matrix()
-        s.update_mic_pos(s.mic_pos @ inv_rot_walls.as_matrix())
+        if meta_param_dict.get("reverse_coordinates", False):  # reversing the coordinate change
+            x = x @ inv_rot_walls.as_matrix()
+            s.update_mic_pos(s.mic_pos @ inv_rot_walls.as_matrix())
 
         # extracting the results
-
         if domain == "frequential":  # extend the RIR to the maximum length
             s.time_sfw.NN = compute_time_sample(s.time_sfw.global_N, s.fs)
             reconstr_rir = s.time_sfw.gamma(a, x)

@@ -96,7 +96,10 @@ while new_exp > n_generated:
 
         # generate 3 random angles for random rotations around Ox,Oy,Oz
         sim_param["rotation_mic"] = Rotation.random().as_euler("xyz", degrees=True)
-        sim_param["rotation_walls"] = Rotation.random().as_euler("xyz", degrees=True)
+        if param_dict.get("same_rotation", True):
+            sim_param["rotation_walls"] = sim_param["rotation_mic"]
+        else:
+            sim_param["rotation_walls"] = Rotation.random().as_euler("xyz", degrees=True)
 
         # generate random absorption coefficients
         abs_coeff = np.random.uniform(param_dict["min_abs"], param_dict["max_abs"], size=6)
