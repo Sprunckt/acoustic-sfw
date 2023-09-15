@@ -8,8 +8,6 @@ import json
 import os
 from src.simulation.utils import dict_to_json
 
-tol_recov = 2e-2
-
 directory = "room_db_full"
 if not os.path.exists(directory):
     os.mkdir(directory)
@@ -64,7 +62,6 @@ while new_exp > n_generated:
     room_dim = [np.random.uniform(*param_dict["xlim"]),
                 np.random.uniform(*param_dict["ylim"]),
                 np.random.uniform(*param_dict["zlim"])]
-    max_order = 1
 
     xroom, yroom, zroom = room_dim
     # check if the source or microphone altitudes are preset
@@ -86,7 +83,6 @@ while new_exp > n_generated:
     while np.linalg.norm(src_pos - mic_pos) < param_dict["mic_src_sep"] and k < max_reject:
         src_pos = np.array([choose_random(*args_src[i]) for i in range(3)])
         mic_pos = np.array([choose_random(*args_mic[i]) for i in range(3)])
-
         k += 1
 
     if k == max_reject:
