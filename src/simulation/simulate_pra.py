@@ -42,6 +42,7 @@ def simulate_rir(room_dim, fs, src_pos, mic_array, max_order, cutoff=-1,
         if verbose:
             print("Using default absorption rate for each wall")
     else:
+        absorptions = absorptions.copy()
         for key, val in absorptions.items():  # convert the absorption rates to PRA materials
             absorptions[key] = pra.Material(val)
 
