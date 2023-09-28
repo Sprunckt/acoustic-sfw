@@ -56,8 +56,8 @@ def degrees_to_rad(alpha):
     return np.pi * alpha / 180
 
 
-def same_half_space(x, y, normal, origin):
-    return (np.dot(x, normal) - origin)*(np.dot(y, normal) - origin) > 0
+def same_half_space(x, y, normal, origin, tol=1e-6):
+    return (np.dot(x, normal) - origin)*(np.dot(y, normal) - origin) > tol
 
 
 def generate_src_coordinates(d1, d2, lower_bound, upper_bound):
@@ -121,7 +121,7 @@ def simplify_hist(hist, ind_sep, it_max=None, window_size=3):
     return hist
 
 
-def find_order1(image_pos):
+def find_order1(image_pos, amplitudes, fusion=0., tol=0.1):
     """
     Simple algorithm to find the order 1 image sources from a cloud of image sources, by sorting the sources by distance
     and eliminating the points located in the half-spaces containing the order 1 sources found at the preceding
@@ -131,36 +131,52 @@ def find_order1(image_pos):
     min_dist_ind = np.argmin(norms)
     source_pos = image_pos[min_dist_ind]  # find the source position as the closest source from the microphone
     image_sources = image_pos[np.arange(len(image_pos)) != min_dist_ind]  # image sources (removed the source)
+    amplitudes = amplitudes[np.arange(len(image_pos)) != min_dist_ind]
     n_image_src = len(image_sources)
     dist = np.linalg.norm(source_pos[np.newaxis, :] - image_sources, axis=1)  # distances to source
     order1 = np.empty([6, 3], dtype=float)
     wall_pos = np.empty([6, 3], dtype=float)
+    ampl_order1 = np.empty(6, dtype=float)
     sorted_dist_ind = np.argsort(dist)
 
     closest_src = image_sources[sorted_dist_ind[0]]  # image source that is closest to the source (should be order 1)
     order1[0] = closest_src
+    ampl_order1[0] = amplitudes[sorted_dist_ind[0]]
     wall_pos[0] = (closest_src + source_pos) / 2.
     normal_vect, origins = np.zeros((6, 3)),  np.zeros(6)
     normal_vect[0] = closest_src - source_pos
     origins[0] = np.dot(wall_pos[0], normal_vect[0])
 
     it_dist, nb_found = 1, 1
-    while it_dist < n_image_src and nb_found < 6:  # loop over the image sources until an order 1 is found
+    old_found = 0
+    while nb_found < 6:  # loop over the image sources until an order 1 is found
         found = True
         curr_source = image_sources[sorted_dist_ind[it_dist]]
         for k in range(nb_found):  # check if the point is in the same half-space as another order 1 source
-            if same_half_space(order1[k], curr_source, normal_vect[k], origins[k]):
+            if same_half_space(order1[k], curr_source, normal_vect[k], origins[k], tol=tol):
                 found = False
                 break
         if found:
-            order1[nb_found] = curr_source
+            if fusion > 0:  # merge sources at dist < fusion of curr_source, average by amplitudes
+                is_close = np.linalg.norm(curr_source - image_sources, axis=1) < fusion
+                ampl_order1[nb_found] = np.sum(amplitudes[is_close])
+                order1[nb_found] = (np.sum(image_sources[is_close] * amplitudes[is_close, np.newaxis], axis=0) /
+                                    ampl_order1[nb_found])
+            else:
+                order1[nb_found] = curr_source
+                ampl_order1[nb_found] = amplitudes[sorted_dist_ind[it_dist]]
             wall_pos[nb_found] = (source_pos + order1[nb_found]) / 2.
             normal_vect[nb_found] = order1[nb_found] - source_pos
             origins[nb_found] = np.dot(wall_pos[nb_found], normal_vect[nb_found])
             nb_found += 1
+            old_found = nb_found
+
 
         it_dist += 1
-    return order1[:nb_found], wall_pos[:nb_found], source_pos
+        if it_dist == n_image_src and nb_found < 6:  # if all the image sources have been checked and not enough
+            tol *= 1.5  # order 1 sources have been found, increase the tolerance and start again
+            it_dist = old_found
+    return order1[:nb_found], wall_pos[:nb_found], source_pos, ampl_order1[:nb_found]
 
 
 def hough_transform(image_pos, dphi, dtheta, thresh):
@@ -529,6 +545,7 @@ class RotationFitter(ABC):
         vec2 /= np.linalg.norm(vec2)
         vec2 -= np.dot(vec2, basis[0]) * basis[0]  # project on the plane
         vec3 = np.cross(basis[0], vec2)  # vec2, vec3 is an orthonormal basis of the plane with normal basis[0]
+
         # project the image sources on vec2, vec3
         self.image_pos_transf = np.stack([np.dot(self.image_pos, vec2), np.dot(self.image_pos, vec3)], axis=-1)
 
@@ -956,12 +973,8 @@ def coordinates_from_index(indexes, basis, src_pos, dim):
                             axis=-1)[:, :, np.newaxis]*basis[np.newaxis, :, :], axis=1))
 
 
-def inverse_step(t, center, scale):
-    return 1 - 0.5 * (jnp.tanh((t-center) * scale / 2) + 1)
-
-
-def find_dimensions_ns(image_pos, basis, ball_size, kernel, kernel_scale, amplitudes,
-                       min_sep=1., nb_neigh=1, cone_width=10, verbose=False):
+def find_dimensions_ns(image_pos, basis, ball_size, kernel, kernel_scale, amplitudes, fusion=0.,
+                       nb_neigh=1, cone_width=10, use_ampl=False, verbose=False):
     """Try to find the room parameters using a cloud of reconstructed image sources and a vector basis normal to the
     walls. Try to identify the order 1 sources by searching from the source in each basis direction in a cone of width
     'cone_width' (in degrees). The 'nb_neigh' closest candidates are kept, and the best combination of supposed order 1
@@ -978,79 +991,137 @@ def find_dimensions_ns(image_pos, basis, ball_size, kernel, kernel_scale, amplit
     src_pos = image_pos[src_ind]
     # remove sources closer than min_sep to the source
     dist_src = np.linalg.norm(image_pos[:, :]-np.reshape(src_pos, [-1, 3])[:, :], axis=-1)
-    del_mask = (0 < dist_src) & (dist_src < min_sep)
-    image_pos = image_pos[~del_mask, :]
+    del_mask = (0 < dist_src) & (dist_src < fusion)
+    image_pos, amplitudes = image_pos[~del_mask, :], amplitudes[~del_mask]
     # remove source from image positions
     norms = norms[~del_mask]
     src_ind = np.argmin(norms)
 
     image_posd = np.delete(image_pos, src_ind, axis=0)
+
     projections = np.sum(image_pos[:, np.newaxis, :] * basis[np.newaxis, :, :], axis=2)  # shape: (nb_images, 3)
     src_pos_proj = projections[src_ind]
     # remove the source
-    projections, amplitudes = np.delete(projections, src_ind, axis=0), np.delete(amplitudes, src_ind, axis=0)
+    projections, amplitudes_d = np.delete(projections, src_ind, axis=0), np.delete(amplitudes, src_ind, axis=0)
 
     best_cost = np.inf
-    best_guess, best_ampl = None, None
-    coord_neigh2, dim_neigh2 = [[[], []] for _ in range(3)], [[[], []] for _ in range(3)]
+    best_guess, best_ampl, best_src = None, None, None
     coord_neigh, dim_neigh, ampl_neigh = [], [], []
     for i in range(3):  # loop over the 3 dimensions
-        # find indexes of sources located in the cone of width cone_width (in degrees), direction i around the source
-        ind_tunnel = (np.arccos(np.clip(np.abs(projections[:, i] - src_pos_proj[i]) /
-                                        np.linalg.norm(image_posd - np.reshape(src_pos, [1, 3]), axis=-1), -1., 1.))
-                      < np.deg2rad(cone_width))
+        lcone_is_empty, rcone_is_empty, tmp_width = True, True,cone_width
+        while (lcone_is_empty or rcone_is_empty) and tmp_width < 180:
+            # find indexes of sources located in the cone of width cone_width (in deg), direction i around the source
+            ind_tunnel = (np.arccos(np.clip(np.abs(projections[:, i] - src_pos_proj[i]) /
+                                            np.linalg.norm(image_posd - np.reshape(src_pos, [1, 3]), axis=-1), -1., 1.))
+                          < np.deg2rad(tmp_width))
 
-        # get nb_neigh nearest neighbors in each direction
-        indp, indm = projections[ind_tunnel][:, i] > src_pos_proj[i], projections[ind_tunnel][:, i] <= src_pos_proj[i]
-        neighp, neighm = image_posd[ind_tunnel][indp], image_posd[ind_tunnel][indm]
-        amplp, amplm = amplitudes[ind_tunnel][indp], amplitudes[ind_tunnel][indm]
+            # get nb_neigh nearest neighbors in each direction
+            if lcone_is_empty:
+                indm = projections[ind_tunnel][:, i] <= src_pos_proj[i]  # sources in the left cone
+                neighm, amplm = image_posd[ind_tunnel][indm], amplitudes_d[ind_tunnel][indm]
+                projm = projections[ind_tunnel][indm]
+                if len(neighm) > 0:
+                    lcone_is_empty = False
+            if rcone_is_empty:
+                indp = projections[ind_tunnel][:, i] > src_pos_proj[i]  # sources in the right cone
+                neighp, amplp = image_posd[ind_tunnel][indp], amplitudes_d[ind_tunnel][indp]
+                projp = projections[ind_tunnel][indp]
+                if len(neighp) > 0:
+                    rcone_is_empty = False
+
+            tmp_width *= 1.25
 
         indsortp = np.argsort(np.linalg.norm(neighp - np.reshape(src_pos, [1, 3]), axis=-1))
-        neighp, projp = neighp[indsortp][:nb_neigh], projections[ind_tunnel][indp][indsortp][:nb_neigh, i]
+        neighp, projp = neighp[indsortp][:nb_neigh], projp[indsortp][:nb_neigh, i]
         indsortm = np.argsort(np.linalg.norm(neighm - np.reshape(src_pos, [1, 3]), axis=-1))
-        neighm, projm = neighm[indsortm][:nb_neigh], projections[ind_tunnel][indm][indsortm][:nb_neigh, i]
+        neighm, projm = neighm[indsortm][:nb_neigh], projm[indsortm][:nb_neigh, i]
+        amplm, amplp = amplm[indsortm][:nb_neigh], amplp[indsortp][:nb_neigh]
+        if fusion > 0:
+            closem = np.linalg.norm(neighm[np.newaxis, :, :] - image_posd[:, np.newaxis, :], axis=-1) <= fusion
+            closep = np.linalg.norm(neighp[np.newaxis, :, :] - image_posd[:, np.newaxis, :], axis=-1) <= fusion
+
+            for j in range(len(neighm)):
+                amplm_tmp = amplitudes_d[closem[:, j]]
+                amplm[j] = np.sum(amplm_tmp)
+                neighm[j] = np.sum(image_posd[closem[:, j]]*amplm_tmp[:, np.newaxis], axis=0) / amplm[j]
+                projm[j] = np.sum(projections[closem[:, j]][:, i]*amplm_tmp) / amplm[j]
+            for j in range(len(neighp)):
+                amplp_tmp = amplitudes_d[closep[:, j]]
+                amplp[j] = np.sum(amplp_tmp)
+                neighp[j] = np.sum(image_posd[closep[:, j]]*amplp_tmp[:, np.newaxis], axis=0) / amplp[j]
+                projp[j] = np.sum(projections[closep[:, j]][:, i]*amplp_tmp) / amplp[j]
+
+        ampl_neigh.append([amplm, amplp])
         coord_neigh.append([neighm, neighp])
-        ampl_neigh.append([amplm[indsortm][:nb_neigh], amplp[indsortp][:nb_neigh]])
         dim_neigh.append([(src_pos_proj[i] - projm)/2, (projp - src_pos_proj[i])/2])
 
-    ampl_recons = np.ones(len(image_pos))
+    if use_ampl:
+        ampl_recons = amplitudes
+    else:
+        ampl_recons = np.ones(len(image_pos))
 
-    def costfun(x):   # x = [d1x, d2x, d1y, d2y, d1z, d2z] distances of the source to the walls
-        dim = x.reshape([3, 2])
-        # max index of image sources in each direction
+    def costfun(x, a):
+        dist = x.reshape([3, 2])
+        dim = np.sum(dist, axis=1)
+        a = a.reshape([3, 2])
         max_num_src = []
         for j in range(3):
-            max_num_src.append(int(np.maximum((ball_size - src_pos[j] + 2 * dim[j, 0]) / (2 * (dim[j, 0] + dim[j, 1])),
-                                              (ball_size + src_pos[j] + 2 * dim[j, 1]) / (2 * (dim[j, 0] + dim[j, 1]))))
-                               + 1)
+            max_num_src.append(int(np.maximum((ball_size - src_pos[j] + 2 * dist[j, 0]) / (2 * dim[j]),
+                                              (ball_size + src_pos[j] + 2 * dist[j, 1]) / (2 * dim[j]))) + 1)
 
         indexes = [generate_src_ind(max_num_src[i]) for i in range(3)]  # generate the indexes of the image sources
         indexes_full = np.array(list(product(indexes[0], indexes[1], indexes[2])))
 
-        coord = coordinates_from_index(indexes_full, basis, src_pos, x.reshape([3, 2]))
-        norms2 = np.sum(coord**2, axis=-1)
-        coord = coord[norms2 <= ball_size**2]  # delete diracs outside the ball
-        ampl = np.ones(len(coord))
 
-        return (measure_norm2(ampl, coord,
+        full_src = coordinates_from_index(indexes_full, basis, src_pos, x.reshape([3, 2]))
+        ind_keep = np.linalg.norm(full_src, axis=1) <= ball_size
+
+        full_src = full_src[ind_keep, :]
+        if use_ampl:
+            ampl_fact = [np.power(a[i][0], np.abs(indexes[i][:, 0])) * np.power(a[i][1], np.abs(indexes[i][:, 1]))
+                         for i in range(3)]
+            full_ampl = np.prod(np.array(list(product(ampl_fact[0], ampl_fact[1], ampl_fact[2]))), axis=1)
+            full_ampl = full_ampl[ind_keep]
+        else:
+            full_ampl = np.ones(len(full_src))
+
+        return (measure_norm2(full_ampl, full_src,
                               ampl_recons, image_pos, kernel, kernel_scale))
 
-    # explore all the possible combinations of the n nearest neighbors, and keep the best one
-    for i in product(range(len(dim_neigh[0][0])), range(len(dim_neigh[0][1]))):
-        for j in product(range(len(dim_neigh[1][0])), range(len(dim_neigh[1][1]))):
-            for k in product(range(len(dim_neigh[2][0])), range(len(dim_neigh[2][1]))):
-                guess = np.array([dim_neigh[0][0][i[0]], dim_neigh[0][1][i[1]],
-                                  dim_neigh[1][0][j[0]], dim_neigh[1][1][j[1]],
-                                  dim_neigh[2][0][k[0]], dim_neigh[2][1][k[1]]])
-                res = costfun(guess)
-                if res < best_cost:
-                    best_cost = res
-                    best_guess = guess
-                    best_ampl = np.array([ampl_neigh[0][0][i[0]], ampl_neigh[0][1][i[1]],
+    td = time.time()
+    if nb_neigh > 1:
+        # explore all the possible combinations of the n nearest neighbors, and keep the best one
+        for i in product(range(len(dim_neigh[0][0])), range(len(dim_neigh[0][1]))):
+            for j in product(range(len(dim_neigh[1][0])), range(len(dim_neigh[1][1]))):
+                for k in product(range(len(dim_neigh[2][0])), range(len(dim_neigh[2][1]))):
+                    guess = np.array([dim_neigh[0][0][i[0]], dim_neigh[0][1][i[1]],
+                                      dim_neigh[1][0][j[0]], dim_neigh[1][1][j[1]],
+                                      dim_neigh[2][0][k[0]], dim_neigh[2][1][k[1]]])
+                    guess_ampl = np.array([ampl_neigh[0][0][i[0]], ampl_neigh[0][1][i[1]],
                                           ampl_neigh[1][0][j[0]], ampl_neigh[1][1][j[1]],
                                           ampl_neigh[2][0][k[0]], ampl_neigh[2][1][k[1]]])
+                    res = costfun(guess, guess_ampl)
+                    if res < best_cost:
+                        best_cost = res
+                        best_guess = guess
+                        best_ampl = guess_ampl
+                        best_src = np.stack([coord_neigh[0][0][i[0]], coord_neigh[0][1][i[1]],
+                                             coord_neigh[1][0][j[0]], coord_neigh[1][1][j[1]],
+                                             coord_neigh[2][0][k[0]], coord_neigh[2][1][k[1]]], axis=0)
+    else:
+        best_cost = "not computed"
+        best_guess = np.array([dim_neigh[0][0][0], dim_neigh[0][1][0],
+                               dim_neigh[1][0][0], dim_neigh[1][1][0],
+                               dim_neigh[2][0][0], dim_neigh[2][1][0]])
+        best_ampl = np.array([ampl_neigh[0][0][0], ampl_neigh[0][1][0],
+                              ampl_neigh[1][0][0], ampl_neigh[1][1][0],
+                              ampl_neigh[2][0][0], ampl_neigh[2][1][0]])
+        best_src = np.stack([coord_neigh[0][0][0], coord_neigh[0][1][0],
+                             coord_neigh[1][0][0], coord_neigh[1][1][0],
+                             coord_neigh[2][0][0], coord_neigh[2][1][0]], axis=0)
 
     if verbose:
+        print("time for comparison: {}".format(time.time() - td))
         if best_guess is None:
             print("no solution found")
             best_guess = np.nan * np.ones(6)
@@ -1058,7 +1129,7 @@ def find_dimensions_ns(image_pos, basis, ball_size, kernel, kernel_scale, amplit
             print("cost: {}".format(best_cost))
             print("dimensions: {}".format(best_guess.reshape([3, 2])))
 
-    return np.reshape(best_guess, [3, 2]).T, src_pos, np.reshape(best_ampl, [3, 2])
+    return np.reshape(best_guess, [3, 2]).T, src_pos, np.reshape(best_ampl, [3, 2]), best_src
 
 
 if __name__ == "__main__":
