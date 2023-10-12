@@ -130,16 +130,8 @@ if __name__ == "__main__":
                 mic_rot = [0, 0, 0.]
             rot_mat = Rotation.from_euler("xyz", mic_rot, degrees=True).as_matrix()
 
-        use_two_antennas = meta_param_dict.get("use_two_antennas", False)
-        if use_two_antennas:
-            antenna1 = load_antenna(mic_size=ms, file_path=mic_path) @ rot_mat
-            antenna2 = antenna1.copy()
-            antenna_rad = np.linalg.norm(antenna1[0])
-
-            half_sep = (antenna_rad + 0.1)*np.array([1., 0, 0])  # half separation between the antennas
-            mic_pos = np.concatenate([antenna1 - half_sep, antenna2 + half_sep], axis=0)
-        else:  # single antenna
-            mic_pos = mic_pos @ rot_mat
+        # rotate the microphones
+        mic_pos = mic_pos @ rot_mat
 
         sim_dict = dict()
 
