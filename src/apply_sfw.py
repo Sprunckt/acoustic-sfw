@@ -122,16 +122,17 @@ if __name__ == "__main__":
         rot = meta_param_dict.get("rotation_mic")
         if rot is not None:  # overwrite the default rotation
             print("overwriting default microphone rotation")
-            rot_mat = Rotation.from_euler("xyz", rot, degrees=True).as_matrix()
+            rot_mic = Rotation.from_euler("xyz", rot, degrees=True)
         else:
             mic_rot = param_dict.get("rotation_mic")
             if mic_rot is None:
                 print("no rotation applied to the antenna")
                 mic_rot = [0, 0, 0.]
-            rot_mat = Rotation.from_euler("xyz", mic_rot, degrees=True).as_matrix()
+            rot_mic = Rotation.from_euler("xyz", mic_rot, degrees=True)
 
         # rotate the microphones
-        mic_pos = mic_pos @ rot_mat
+        original_mic_pos = mic_pos.copy()
+        mic_pos = rot_mic.apply(mic_pos)
 
         sim_dict = dict()
 
@@ -263,20 +264,10 @@ if __name__ == "__main__":
             measurements = measurements + added_noise  # update the measurements to save the target RIR
             s.__init__(y=measurements, **sfw_init_args)
 
-        # apply a transformation to the room coordinates (done after creating the observations)
-        rot_walls = meta_param_dict.get("rotation_walls")  # overwrite the room rotation
-        if rot_walls is None:  # using the rotation specific to the room
-            rot_walls = param_dict.get("rotation_walls")
-            if rot_walls is None:
-                print("no rotation applied to the walls")
-                rot_walls = [0, 0, 0.]
-
-        rot_walls = Rotation.from_euler("xyz", rot_walls, degrees=True)
-        inv_rot_walls = rot_walls.inv()
-        s.update_mic_pos(mic_pos @ rot_walls.as_matrix())
-
+        # reverse rotation on microphones before reconstruction
+        s.update_mic_pos(original_mic_pos)
         if domain == "deconvolution":
-            s.source_pos = s.source_pos @ rot_walls.as_matrix()
+            s.source_pos = rot_mic.apply(s.source_pos, inverse=True)
 
         save_var = meta_param_dict.get("save_path")
         if save_var is not None:
@@ -294,8 +285,8 @@ if __name__ == "__main__":
                              early_stopping=True, plot=False, saving_param=save_var)
 
         if meta_param_dict.get("reverse_coordinates", False):  # reversing the coordinate change
-            x = x @ inv_rot_walls.as_matrix()
-            s.update_mic_pos(s.mic_pos @ inv_rot_walls.as_matrix())
+            x = rot_mic.apply(x)
+            s.update_mic_pos(rot_mic.apply(s.mic_pos))
 
         # extracting the results
         if domain == "frequential":  # extend the RIR to the maximum length
