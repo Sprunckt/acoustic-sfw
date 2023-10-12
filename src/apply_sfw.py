@@ -13,7 +13,7 @@ import sys
 import pandas as pd
 import time
 
-tol_recov = 2e-2
+tol_recov = 2e-2  # tolerance threshold for quick evaluation
 
 plot = False
 ideal = True  # if True, use the observation operator to reconstruct the measure, else use a PRA simulation
@@ -78,6 +78,10 @@ if __name__ == "__main__":
     fc = meta_param_dict.get("fc", fs)  # cutoff frequency, defaults to fs
 
     ms = meta_param_dict.get("mic_size")  # array size factor
+    mic_path = meta_param_dict.get("mic_path")  # path to the microphone positions
+    if mic_path is None:
+        mic_path = 'data/eigenmike32_cartesian.csv'
+
     max_order = meta_param_dict["max_order"]  # maximum order of reflections used
 
     # amplitude threshold for deleting the spikes at each iteration
@@ -111,9 +115,9 @@ if __name__ == "__main__":
         rand_gen.seed(exp_ids[exp_ind])
 
         if ms is not None:  # overwrite the microphone positions
-            mic_pos = load_antenna(mic_size=ms)
+            mic_pos = load_antenna(mic_size=ms, file_path=mic_path)
         else:  # use default values
-            mic_pos = load_antenna(mic_size=1.)
+            mic_pos = load_antenna(mic_size=1., file_path=mic_path)
 
         rot = meta_param_dict.get("rotation_mic")
         if rot is not None:  # overwrite the default rotation
@@ -128,7 +132,7 @@ if __name__ == "__main__":
 
         use_two_antennas = meta_param_dict.get("use_two_antennas", False)
         if use_two_antennas:
-            antenna1 = load_antenna(mic_size=ms) @ rot_mat
+            antenna1 = load_antenna(mic_size=ms, file_path=mic_path) @ rot_mat
             antenna2 = antenna1.copy()
             antenna_rad = np.linalg.norm(antenna1[0])
 

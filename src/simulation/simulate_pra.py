@@ -4,7 +4,7 @@ import json
 from .utils import multichannel_rir_to_vec, array_to_list, c
 
 
-def load_antenna(file_path='data/eigenmike32_cartesian.csv', mic_size=1.):
+def load_antenna(file_path, mic_size=1.):
     """Load the eigenmike32 spherical microphone array and dilate it by the factor mic_size
     Source: https://www.locata.lms.tf.fau.de/files/2020/01/Documentation_LOCATA_final_release_V1.pdf
     """
