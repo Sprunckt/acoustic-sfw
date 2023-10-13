@@ -964,28 +964,37 @@ def gaussian_kernel(x, sigma=1.):
     return np.exp(-x/(2*sigma**2))
 
 
-def find_dimensions_ns(image_pos, basis, amplitudes, fusion=0., cone_width=10):
+def find_dimensions_ns(image_pos, basis, amplitudes, fusion=0.5, cone_width=10):
     """Try to find the room parameters using a cloud of reconstructed image sources and a vector basis normal to the
     walls. Try to identify the order 1 sources by searching from the source in each basis direction in a cone of width
-    'cone_width' (in degrees). The 'nb_neigh' closest candidates are kept, and the best combination of supposed order 1
-    sources is found by comparing the reconstructed 'image_pos' to the corresponding exact image sources distribution.
-    The comparison is made using a kernel norm between the two dirac measures clouds.
-    Returns: (dimensions, source_pos, ampl1) where dimensions contains the distance of the source to the walls (shape
-    (2, 3)), source_pos is the size 3 array of source coordinates, ampl1 contains the reflection coefficients of the
-    walls
+    'cone_width' (in degrees).
+    Args: - image_pos: positions of the image sources
+          - basis: vector basis normal to the walls
+          - amplitudes: amplitudes of the image sources in sparse reconstruction formulation
+          - fusion: distance threshold to merge sources, set to 0 to consider only one source
+          - cone_width: width of the search cones in degrees, is extended progressively if no source is found
+    Return: - room_dim: estimated room dimensions, shape (2, 3)
+             - src_pos: estimated source position, shape (3,)
+             - src_ampl: estimated source amplitude (1 - src_ampl**2 gives the absorption coefficient)
+             - order1_ampl: estimated order 1 source amplitudes, shape (3, 2) (each line corresponds to a normal)
+             - order1_pos: estimated order 1 source positions, shape (6, 3) (order1_ampl.flatten() of shape (6,)
+             follows the same order)
     """
 
     norms = np.linalg.norm(image_pos, axis=-1)
     src_ind = np.argmin(norms)
     src_pos = image_pos[src_ind]
-    # merge sources closer than min_sep to the source
-    dist_src = np.linalg.norm(image_pos[:, :]-np.reshape(src_pos, [-1, 3])[:, :], axis=-1)
-    close = dist_src < fusion
-    ampl_close = amplitudes[close]
-    image_pos_close = image_pos[close]
-    src_ampl = np.sum(ampl_close)
-    src_pos = np.sum(image_pos_close*ampl_close[:, np.newaxis], axis=0) / src_ampl
-    amplitudes, image_pos = amplitudes[~close], image_pos[~close]   # delete merged sources
+    if fusion > 0:  # merge sources closer than fusion to the source
+        dist_src = np.linalg.norm(image_pos[:, :]-np.reshape(src_pos, [-1, 3])[:, :], axis=-1)
+        close = dist_src < fusion
+        ampl_close = amplitudes[close]
+        image_pos_close = image_pos[close]
+        src_ampl = np.sum(ampl_close)
+        src_pos = np.sum(image_pos_close*ampl_close[:, np.newaxis], axis=0) / src_ampl
+        amplitudes, image_pos = amplitudes[~close], image_pos[~close]   # delete merged sources
+    else:
+        src_ampl = amplitudes[src_ind]
+        image_pos, amplitudes = np.delete(image_pos, src_ind, axis=0), np.delete(amplitudes, src_ind, axis=0)
 
     projections = np.sum(image_pos[:, np.newaxis, :] * basis[np.newaxis, :, :], axis=2)  # shape: (nb_images, 3)
     src_pos_proj = np.sum(src_pos[np.newaxis, :] * basis, axis=1)  # shape: (3,)
