@@ -443,6 +443,8 @@ def sample_sphere(n):
 
 
 class RotationFitter(ABC):
+    """Abstract class for orientation fitting algorithms. Now only supports the kernel method (continuous histogram
+    method was removed in commit 26a137d)."""
     def __init__(self, image_pos):
         self.image_pos = image_pos.copy()
 
@@ -473,14 +475,14 @@ class RotationFitter(ABC):
         """Compute the dot product between u and the source positions."""
         return self.image_pos_transf[:, 0] * (cos_u*self.cos_pos2 + sin_u*self.sin_pos2)
 
-    def fit(self, gridparam=2000, niter=10000, tol=1e-10, bvalues=None, verbose=False, plot=False):
+    def fit(self, gridparam=2000, niter=10000, tol=1e-10, bvalues3d=None, bvalues2d=None, verbose=False, plot=False):
         """Reconstruct the distance of the source to each wall.
-           args:-method (str): 'distance' or 'histogram' to use the distance or histogram cost function.
-                -gridparam (union(int, float)): if int, number of points to sample randomly on the unit sphere.
+           args:-gridparam (union(int, float)): if int, number of points to sample randomly on the unit sphere.
            if float, the angular resolution of the grid in degrees.
                 -niter (int): number of iterations
                 -tol (float): tolerance for the stopping criterion
                 -verbose (bool): print the cost function value at each iteration
+                -bvalues3d, bvalues2d (array): list of decreasing bandwidth values for the 3d and 2d optimization
         """
         if isinstance(gridparam, int):
             grid = sample_sphere(gridparam)  # sample ngrid points randomly in the unit sphere
@@ -491,24 +493,28 @@ class RotationFitter(ABC):
         else:
             raise ValueError("gridparam should be an int or a float.")
 
-        if bvalues is None:
+        if bvalues3d is None:
             if verbose:
-                print("Using default bandwidth value.")
+                print("Using default 3d bandwidth value.")
             bvalues = [1.]
+        if bvalues2d is None:
+            if verbose:
+                print("Using default 2d bandwidth value.")
+            bvalues2d = [1.]
 
         tstart = time.time()
 
         tc1 = time.time()
         # grid search for the initial guess
-        costval = np.apply_along_axis(self.costfun, 1, grid[:, 1:], bvalues[0])
+        costval = np.apply_along_axis(self.costfun, 1, grid[:, 1:], bvalues3d[0])
         tc2 = time.time()
 
         if verbose:
             print("time for costval : ", tc2-tc1)
         bestind = np.argmin(costval)
         u0, initval = grid[bestind][1:], costval[bestind]
-        for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
-            bandwidth = bvalues[k]
+        for k in range(len(bvalues3d)):  # loop over the decreasing bandwidth values
+            bandwidth = bvalues3d[k]
             initval = self.costfun(u0, bandwidth)
             minimizer = jaxopt.ScipyMinimize(fun=self.costfun, method='BFGS', maxiter=niter,
                                              options={'gtol': tol})
@@ -559,7 +565,7 @@ class RotationFitter(ABC):
         grid = np.linspace(0, np.pi, 4000).reshape([-1, 1])
 
         tc1 = time.time()
-        costval = np.apply_along_axis(self.costfun2, 1, grid, bvalues[0])
+        costval = np.apply_along_axis(self.costfun2, 1, grid, bvalues2d[0])
         tc2 = time.time()
 
         if verbose:
@@ -567,8 +573,8 @@ class RotationFitter(ABC):
 
         bestind = np.argmin(costval)
         u0 = grid[bestind]
-        for k in range(len(bvalues)):  # loop over the decreasing bandwidth values
-            bandwidth = bvalues[k]
+        for k in range(len(bvalues2d)):  # loop over the decreasing bandwidth values
+            bandwidth = bvalues2d[k]
             initval = self.costfun2(u0, bandwidth)
 
             minimizer = jaxopt.ScipyMinimize(fun=self.costfun2, method='BFGS', maxiter=niter,
@@ -750,9 +756,9 @@ def compute_best_cluster(clusters, center_ind, cluster_sizes, tol, dx=0.02, plot
     return ind_best
 
 
-def find_dimensions(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.5, threshold=0.1, max_iter=300,
-                    src_pos=None, merge=True, post_process=True,
-                    verbose=False, plot=False):
+def find_dimensions_clusters(image_pos, basis, prune=0, max_dist=0.25, min_cluster_sep=1.5, threshold=0.1, max_iter=300,
+                             src_pos=None, merge=True, post_process=True,
+                             verbose=False, plot=False):
     """Find the dimensions of the room from the image positions and the (reconstructed) orthonormal basis of the room.
     The projections of the image positions on the basis are used to find the room dimensions by clustering on each
     axis, 'bandwidth' is the bandwidth of the clustering algorithm.
@@ -938,27 +944,6 @@ def kernel_dot(a1, r1, a2, r2, kernel, kernel_scale):
     return np.sum(kernel(distances2, kernel_scale)*a1[:, jnp.newaxis]*a2[jnp.newaxis, :])
 
 
-def measure_norm2(a1, r1, a2, r2, kernel, kernel_scale):
-    """Measure of the norm of a linear combination of diracs."""
-    return (kernel_dot(a1, r1, a1, r1, kernel, kernel_scale) +
-            kernel_dot(a2, r2, a2, r2, kernel, kernel_scale) -
-            2*kernel_dot(a1, r1, a2, r2, kernel, kernel_scale))
-
-
-def generate_src_ind(kmax):
-    """Generate the coordinates of the image sources in one direction, given the distances of the source to the walls
-    and bounds (assume the origin is located at the source)."""
-    coord_list = []
-
-    for k in range(kmax):
-        coord_list.append((k, k))
-        coord_list.append((-k, -k))
-        coord_list.append((-k-1, -k))
-        coord_list.append((k, k+1))
-
-    return np.array(coord_list[1:-2])
-
-
 def gaussian_kernel(x, sigma=1.):
     """Gaussian kernel."""
     return np.exp(-x/(2*sigma**2))
@@ -973,7 +958,7 @@ def find_dimensions_ns(image_pos, basis, amplitudes, fusion=0.5, cone_width=10):
           - amplitudes: amplitudes of the image sources in sparse reconstruction formulation
           - fusion: distance threshold to merge sources, set to 0 to consider only one source
           - cone_width: width of the search cones in degrees, is extended progressively if no source is found
-    Return: - room_dim: estimated room dimensions, shape (2, 3)
+    Return: - room_dim: estimated distances of the source to each wall, shape (2, 3)
              - src_pos: estimated source position, shape (3,)
              - src_ampl: estimated source amplitude (1 - src_ampl**2 gives the absorption coefficient)
              - order1_ampl: estimated order 1 source amplitudes, shape (3, 2) (each line corresponds to a normal)
