@@ -9,6 +9,7 @@ import pandas as pd
 import os
 import sys
 import getopt
+from scipy.spatial.transform import Rotation
 
 
 def count_results(directory):
@@ -41,7 +42,8 @@ def extract_subdirectories(pth):
 
 def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol=None, n_src=0,
                 max_norm=None, unique=True, distance="cartesian", reconstr_ampl_threshold=None, metrics_path=None,
-                return_paths=False):
+                individual_path=None,   # save distances to sources individually, only works for a single cartesian tol
+                return_paths=False, params_path=None, subset=None):
 
     assert distance in ['spherical', 'cartesian'], "invalid distance type"
 
@@ -76,9 +78,14 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
         exp_dfs = [pd.DataFrame(columns=col).astype({col[i]: types[i] for i in range(len(col))})
                    for _ in range(ntol)]  # one DF per tolerance threshold given
 
-        tp, fp, fn = [0]*ntol, [0]*ntol, [0]*ntol
+        tp, fp, fn, global_error = [0]*ntol, [0]*ntol, [0]*ntol, [0]*ntol
+        individual_dist = []
+        if subset is None:
+            indrange = range(max_ind + 1)
+        else:
+            indrange = subset
 
-        for i in range(max_ind + 1):  # loop over every experiment
+        for i in indrange:  # loop over every experiment
             complete_path = os.path.join(path, "exp_{}_res.json".format(i))
 
             try:
@@ -90,6 +97,12 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
             real_sources, predicted_sources = res_dict["image_pos"], res_dict["reconstr_pos"]
             real_ampl, reconstr_ampl = res_dict["ampl"], res_dict["reconstr_ampl"]
             orders = res_dict["orders"]
+
+            if params_path is not None:  # apply inverse rotation to the reconstructed sources
+                params_dict = json_to_dict(os.path.join(params_path, "exp_{}_param.json".format(i)))
+                rotation = params_dict["rotation_mic"]
+                rotation = Rotation.from_euler('xyz', rotation, degrees=True)
+                predicted_sources = rotation.apply(predicted_sources)
 
             if reconstr_ampl_threshold is not None:
                 ind_considered = reconstr_ampl >= reconstr_ampl_threshold
@@ -137,6 +150,10 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
                 real_sources, real_ampl = real_sources[norm_ind], real_ampl[norm_ind]
             nb_found, nb_needed = len(reconstr_ampl), len(real_ampl)
 
+            if len(real_sources) == 0:
+                print("empty array, continuing")
+                continue
+
             if unique:
                 # unique matches, looking only at the True positives at minimum distance
                 inda, indb, dist = unique_matches(predicted_sources, real_sources, ampl=None)
@@ -173,9 +190,12 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
 
                 entry = dict(exp_id=i, nb_src=nb_real, nb_found=nb_found, nb_recov=ctp, recall=ctp/nb_real,
                              precision=ctp/nb_found, ampl_corr=correlation_ampl, ampl_rel_error=relative_error)
-
+                if ctp == 0:
+                    print("no source found exp ", i)
                 # mean cartesian distance to real sources for the best recovered sources
                 entry["mean_recov_dist"] = dist[ind_tol].mean()
+                global_error[k] += dist[ind_tol].sum()
+
                 # mean distance to real sources for all recovered sources
                 if not unique:
                     entry["mean_dist"] = dist.mean()
@@ -198,14 +218,20 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
                     entry["mean_angular_dist"] = all_dist_circle.mean()
 
                 exp_dfs[k] = exp_dfs[k].append(entry, ignore_index=True)
+            if individual_path is not None:
+                individual_dist.append(dist[ind_tol])
 
+        if individual_path is not None:  # save as .csv
+            individual_dist = np.concatenate(individual_dist)
+            np.savetxt(os.path.join(individual_path, "{}_distances_{}.csv".format(os.path.split(path)[-1], n_src)),
+                       individual_dist, delimiter=",")
         if metrics_path is not None:
             for k in range(ntol):
-                exp_dfs[k].to_csv(os.path.join(metrics_path, "{}_metrics_{}.csv".format(os.path.split(path)[-1],
-                                                                                        tol[k])),
+                exp_dfs[k].to_csv(os.path.join(metrics_path, "{}_metrics_{}_{}.csv".format(os.path.split(path)[-1],
+                                                                                           n_src, tol[k])),
                                   index=False)
 
-                entry = dict(exp_id=path, TP=tp[k], FN=fn[k], FP=fp[k],
+                entry = dict(exp_id=path, TP=tp[k], FN=fn[k], FP=fp[k], mean_recov_dist=global_error[k]/tp[k],
                              precision=tp[k]/(tp[k]+fp[k]), recall=tp[k]/(tp[k]+fn[k]))
 
                 global_dfs[k] = global_dfs[k].append(entry, ignore_index=True)
@@ -215,7 +241,7 @@ def get_metrics(paths, save_path=None, method="amplitude", delimiter=np.inf, tol
             os.mkdir(save_path)
 
         for k in range(ntol):
-            global_dfs[k].to_csv(os.path.join(save_path, 'global_metrics_{}.csv'.format(tol[k])), index=False)
+            global_dfs[k].to_csv(os.path.join(save_path, 'global_metrics_{}_{}.csv'.format(n_src, tol[k])), index=False)
 
     if return_paths:
         return global_dfs, path_list
