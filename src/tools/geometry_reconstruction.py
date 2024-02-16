@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.special import expit
 from src.simulation.utils import create_grid_spherical
 import multiprocessing as mp
 import os
@@ -11,7 +10,6 @@ from src.simulation.utils import unique_matches
 import jax.numpy as jnp
 import jaxopt
 import jax
-from itertools import product
 from jax.config import config
 from functools import partial
 config.update("jax_debug_nans", True)  # track nan occurences
