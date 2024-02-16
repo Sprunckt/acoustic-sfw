@@ -1,6 +1,5 @@
 import numpy as np
-from src.simulation.utils import c
-
+from src.simulation.utils import c, create_grid_spherical
 
 def filt(t, fs):
     """Return the filter function for the sinc kernel."""
@@ -54,13 +53,45 @@ def gamma_op(r, N, mic_pos, fs):
     return gamma_mat
 
 
+def pV(r, N, mic_pos, fs):
+    """Return the vector pV of length NM used to compute the precertificate"""
+    gamma_mat, K = gamma_op(r, N, mic_pos, fs), len(r)
+    vec = np.zeros(4*K)
+    vec[:K] = 1.
+    return np.linalg.pinv(gamma_mat).T @ vec
+
+
+def etav(rpos, pvec, N, mic_pos, fs):
+    return np.sum(pvec[:, np.newaxis] * gamma_mn(np.reshape(rpos, [-1, 3]), N, mic_pos, fs), axis=0)
+
+
+def reps_sampling(extent, eps, mic_pos, sample_step):
+    """Return a list of points in a grid of size extent, with a step sample_step, hollowing balls of radius eps around
+    each microphone position."""
+    x, y, z = np.meshgrid(np.arange(extent[0, 0], extent[1, 0], sample_step),
+                          np.arange(extent[0, 1], extent[1, 1], sample_step),
+                          np.arange(extent[0, 2], extent[1, 2], sample_step))
+    grid = np.array([x, y, z]).T.reshape(-1, 3)
+    mask = np.ones(len(grid), dtype=bool)
+    for mic in mic_pos:
+        mask = np.logical_and(mask, np.sum((grid - mic)**2, axis=1) > eps**2)
+    return grid[mask]
+
+
+def rmic_sampling(rmin, rmax, rpos, r_step, theta_step):
+    """Sample in balls of radius rmax around each microphone position, with a step r_step and theta_step in spherical
+    coordinates."""
+    grid_ball = create_grid_spherical(rmin=rmin, rmax=rmax, dr=r_step, dtheta=theta_step, dphi=theta_step)[0]
+    return np.stack([rpos[i] + grid_ball for i in range(len(rpos))], axis=0).reshape(-1, 3)
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
-    mic_pos = np.array([[0, 0., 0], [1.20, 0, 0], [0, 1, 0], [0, 0, 1]])
-    r = np.array([[0, 2., .64654], [1.54, 3.564987, 0]])
+    mic_pos = np.array([[0, 0., 0], [1.20, 0, 0], [0, 1.1, -2.15], [0, 2.54, 1]])
+    r = np.array([[0, 2., .64654], [1.54, -2.564987, 0]])
     N = 500
-    fs = 8000
+    fs = 16000
 
     # check derivatives
     gmat = gamma_op(r, N, mic_pos, fs)
@@ -74,3 +105,14 @@ if __name__ == "__main__":
     plt.legend()
     plt.show()
 
+    # check etaV
+    grid = rmic_sampling(0.01, 1., r, 0.01, 2)
+    print(grid.shape)
+    total_size, batch_size = grid.shape[0], 100000
+    etaval = np.zeros(total_size)
+
+    for i in range(0, total_size, batch_size):
+        if i%100000 == 0:
+            print(i)
+        etaval[i:i+batch_size] = etav(grid[i:i+batch_size], pV(r, N, mic_pos, fs), N, mic_pos, fs)
+    print(np.max(etaval), np.min(etaval))
