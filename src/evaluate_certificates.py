@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
-from src.simulation.utils import (create_grid_spherical, c, json_to_dict, create_grid_spherical_multiple)
+from src.simulation.utils import (create_grid_spherical, c, json_to_dict, dict_to_json, create_grid_spherical_multiple)
 from src.tools.certificates import gamma_op, etav, etav_der2, pV
 from src.simulation.simulate_pra import load_antenna
 import multiprocessing as mp
@@ -134,7 +134,7 @@ if __name__ == "__main__":
         # compute the rank of the gamma matrix
         print("Computing gamma matrix rank")
         gamma_mat = gamma_op(image_pos, N, mic_pos, fs)
-        rank = np.linalg.matrix_rank(gamma_mat)
+        rank = int(np.linalg.matrix_rank(gamma_mat))
         dict_res["gamma_rank"] = rank
 
         # compute the hessian of eta_v at each spike position
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         dict_res["max_eta"] = max_eta
 
         # save the results
-        json_to_dict(dict_path, dict_res)
+        dict_to_json(dict_res, dict_path)
 
 
     print("total execution time : {} s".format(time.time() - tstart))
