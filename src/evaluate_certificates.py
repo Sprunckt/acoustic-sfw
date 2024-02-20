@@ -26,7 +26,7 @@ if __name__ == "__main__":
         opts, args = getopt.getopt(sys.argv[1:], '', ['path=', 'exp=', 'exp_path=', 'res_path='])
 
     except getopt.GetoptError:
-        print("evaluate_certificates.py [--path=] [--exp=] [--exp_path]\n"
+        print("evaluate_certificates.py [--path=] [--exp=] [--exp_path] [--res_path=] \n"
               "--path= : directory where the results will be saved \n"
               "--exp_path= : directory containing the experiment parameters \n"
               "--res_path= : directory containing the reconstruction results \n"
@@ -150,11 +150,12 @@ if __name__ == "__main__":
 
         # compute the maximum value of |eta_v| in parallel using multiprocessing.Pool
         print("Computing max |eta_v|")
+
         def max_eta_worker(i, batch_size):
             print("batch ", i)
             return np.max(np.abs(etav(full_grid[i*batch_size:(i+1)*batch_size], pvec, N, mic_pos, fs)))
 
-        pool = mp.Pool(2)
+        pool = mp.Pool(mp.cpu_count())
         # split the grid into batches, split the batches among the workers
         batch_size = 5000
         n_batches = int(np.ceil(len(full_grid)/batch_size))
