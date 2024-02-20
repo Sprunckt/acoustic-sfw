@@ -155,17 +155,32 @@ if __name__ == "__main__":
         # compute the maximum value of |eta_v| in parallel using multiprocessing.Pool
         print("Computing max |eta_v|")
 
-        def max_eta_worker(i, batch_size):
-            print("batch ", i)
-            return np.max(np.abs(etav(full_grid[i*batch_size:(i+1)*batch_size], pvec, N, mic_pos, fs)))
-
-        pool = mp.Pool(mp.cpu_count())
+        mp_dict = {}
         # split the grid into batches, split the batches among the workers
-        batch_size = 5000
+        batch_size = 500
         n_batches = int(np.ceil(len(full_grid)/batch_size))
+
+        def init_worker(full_grid, full_grid_shape, batch_size, n_batches, pvec, N, mic_pos, fs):
+            mp_dict["full_grid"], mp_dict["batch_size"], mp_dict["n_batches"] = full_grid, batch_size, n_batches
+            mp_dict["full_grid_shape"] = full_grid_shape
+            mp_dict["pvec"] = pvec
+
+        def max_eta_worker(i):
+            print("batch ", i)
+
+            subgrid = np.reshape(np.frombuffer(mp_dict['full_grid'], dtype=np.float64),
+                                 mp_dict['full_grid_shape'])[i*mp_dict['batch_size']: (i+1)*mp_dict['batch_size']]
+            return np.max(np.abs(etav(subgrid, np.frombuffer(mp_dict['pvec'], dtype=np.float64), N, mic_pos, fs)))
+
+        raw_grid, raw_pv = mp.RawArray('d', full_grid.shape[0]*3), mp.RawArray('d', len(pvec))
+        np.copyto(np.frombuffer(raw_grid, dtype=np.float64), np.reshape(full_grid, -1))
+        np.copyto(np.frombuffer(raw_pv, dtype=np.float64), np.reshape(pvec, -1))
+
+        pool = mp.Pool(mp.cpu_count(), initializer=init_worker,
+                       initargs=(raw_grid, full_grid.shape, batch_size, n_batches, raw_pv, N, mic_pos, fs))
+
         print("Number of batches: ", n_batches)
-        fun = partial(max_eta_worker, batch_size=batch_size)
-        max_eta = np.max(pool.map(fun, range(n_batches)))
+        max_eta = pool.map(max_eta_worker, range(n_batches))
         dict_res["max_eta"] = max_eta
 
         # save the results
