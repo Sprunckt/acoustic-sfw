@@ -51,6 +51,7 @@ if __name__ == "__main__":
 
     if not os.path.exists(save_path):
         os.mkdir(save_path)
+    stdout = sys.stdout
 
     # certificate evaluation parameters
     certif_param_path = os.path.join(save_path, "parameters.json")
@@ -78,6 +79,9 @@ if __name__ == "__main__":
     print("grid type : {}, grid spacing : {}, overflow : {}".format(grid_type, grid_spacing, overflow))
     tstart = time.time()
     for exp_ind, path in enumerate(paths):
+        # redirecting stdout to capture the prints
+        sys.stdout = open(os.path.join(save_path, "certif_{}.out".format(exp_ids[exp_ind])), 'w')
+
         print("Evaluating certificates in exp " + os.path.split(path)[-1])
         # parameters specific to the current room experience
         param_dict = json_to_dict(path)
@@ -166,6 +170,7 @@ if __name__ == "__main__":
 
         # save the results
         dict_to_json(dict_res, dict_path)
-
+        sys.stdout.close()
+        sys.stdout = stdout
 
     print("total execution time : {} s".format(time.time() - tstart))
