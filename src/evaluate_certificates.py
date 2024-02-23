@@ -71,8 +71,8 @@ if __name__ == "__main__":
     # type of grid used for evaluating |etav| : "full" or "centered"
     grid_type = certif_param_dict.get("grid_type", "full")
 
-    # grid spacing, either (dr, dtheta) for "centered"  or (dx, dr, dtheta, rmin, rmax) if grid_type is "full"
-    grid_spacing = certif_param_dict.get("grid_spacing", [0.05, 0.01, 2.])
+    # grid spacing, either (dr, dtheta) for "centered"  or (coarse_dx, fine_dx) if grid_type is "full"
+    grid_spacing = certif_param_dict.get("grid_spacing", [0.05, 0.01])
 
     # extent overflow for the grid
     overflow = certif_param_dict.get("overflow", 2*c/fs)
@@ -128,11 +128,13 @@ if __name__ == "__main__":
                                     np.arange(valmin[2], valmax[2], grid_spacing[0]))
 
             full_grid = np.stack([full_grid[0].flatten(), full_grid[1].flatten(), full_grid[2].flatten()], axis=1)
-            # spherical refinement around image_pos
-            sph_grid, _ = create_grid_spherical(rmin=grid_spacing[3], rmax=grid_spacing[4], dr=grid_spacing[1],
-                                                dphi=grid_spacing[2], dtheta=grid_spacing[2])
+            # refinement around image_pos
+            add_grid = np.meshgrid(np.arange(-overflow, overflow + grid_spacing[1], grid_spacing[1]),
+                                   np.arange(-overflow, overflow + grid_spacing[1], grid_spacing[1]),
+                                   np.arange(-overflow, overflow + grid_spacing[1], grid_spacing[1]))
+            add_grid = np.stack([add_grid[0].flatten(), add_grid[1].flatten(), add_grid[2].flatten()], axis=1)
 
-            full_grid = np.concatenate([full_grid, np.zeros([len(sph_grid)*len(image_pos)])], axis=0)
+            full_grid = np.concatenate([full_grid] + [add_grid + pos for pos in image_pos], axis=0)
 
         print("Number of grid nodes: ", len(full_grid))
         # compute the rank of the gamma matrix
@@ -167,10 +169,11 @@ if __name__ == "__main__":
 
         def max_eta_worker(i):
             print("batch ", i)
-
             subgrid = np.reshape(np.frombuffer(mp_dict['full_grid'], dtype=np.float64),
                                  mp_dict['full_grid_shape'])[i*mp_dict['batch_size']: (i+1)*mp_dict['batch_size']]
-            return np.max(np.abs(etav(subgrid, np.frombuffer(mp_dict['pvec'], dtype=np.float64), N, mic_pos, fs)))
+            etaval = np.abs(etav(subgrid, np.frombuffer(mp_dict['pvec'], dtype=np.float64), N, mic_pos, fs))
+            ind = np.argmax(etaval)
+            return np.max(etaval[ind]), subgrid[ind]
 
         raw_grid, raw_pv = mp.RawArray('d', full_grid.shape[0]*3), mp.RawArray('d', len(pvec))
         np.copyto(np.frombuffer(raw_grid, dtype=np.float64), np.reshape(full_grid, -1))
@@ -180,8 +183,15 @@ if __name__ == "__main__":
                        initargs=(raw_grid, full_grid.shape, batch_size, n_batches, raw_pv, N, mic_pos, fs))
 
         print("Number of batches: ", n_batches)
-        max_eta = pool.map(max_eta_worker, range(n_batches))
-        dict_res["max_eta"] = max_eta
+        res_map = pool.map(max_eta_worker, range(n_batches))
+        pool.close()
+
+        max_eta, posmax = np.zeros(n_batches), np.zeros((n_batches, 3))
+        for i in range(n_batches):
+            max_eta_curr, posmax_curr = res_map[i]
+            max_eta[i], posmax[i] = max_eta_curr, posmax_curr
+
+        dict_res["max_eta"], dict_res["max_ind"] = max_eta, posmax
 
         # save the results
         dict_to_json(dict_res, dict_path)
