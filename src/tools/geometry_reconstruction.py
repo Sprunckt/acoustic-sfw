@@ -87,38 +87,6 @@ def generate_src_coordinates(d1, d2, lower_bound, upper_bound):
     return np.sort(coord_list)
 
 
-def image_source_score(image_pos, coord, penalization, tol):
-    is_close = np.abs(image_pos[:, np.newaxis] - coord[np.newaxis, :]) < tol
-    score = np.sum(is_close)
-    score -= penalization*np.sum(np.any(~is_close, axis=0))
-
-    return score
-
-
-def simplify_hist(hist, ind_sep, it_max=None, window_size=3):
-    """Extract bin spikes from an histogram array. Start by smoothing the histogram by applying a sliding window mean
-    around each bin. At each iteration k clear a space of width 2*ind_sep around the k greatest remaining value.
-    At the end the remaining array should not contain contiguous non-zero values."""
-
-    hist = np.convolve(hist, np.ones(window_size), mode='same')
-
-    if it_max is None:
-        it_max = np.inf
-    k, stat = 0, False
-    while k < it_max and not stat:
-        tmp = hist.copy()
-        ind_sort = np.argsort(hist)[-1-k]
-        max_val = hist[ind_sort]
-        tmp[np.maximum(ind_sort-ind_sep, 0):ind_sort+ind_sep] = 0
-        tmp[ind_sort] = max_val
-        if np.all(tmp == hist):
-            stat = True
-        else:
-            hist = tmp
-            k += 1
-    return hist
-
-
 def find_order1(image_pos, amplitudes, fusion=0., tol=0.1):
     """
     Simple algorithm to find the order 1 image sources from a cloud of image sources, by sorting the sources by distance
@@ -128,16 +96,23 @@ def find_order1(image_pos, amplitudes, fusion=0., tol=0.1):
     norms = np.linalg.norm(image_pos, axis=1)
     min_dist_ind = np.argmin(norms)
     source_pos = image_pos[min_dist_ind]  # find the source position as the closest source from the microphone
-    image_sources = image_pos[np.arange(len(image_pos)) != min_dist_ind]  # image sources (removed the source)
-    amplitudes = amplitudes[np.arange(len(image_pos)) != min_dist_ind]
-    n_image_src = len(image_sources)
-    dist = np.linalg.norm(source_pos[np.newaxis, :] - image_sources, axis=1)  # distances to source
-    order1 = np.empty([6, 3], dtype=float)
-    wall_pos = np.empty([6, 3], dtype=float)
+    if fusion > 0:
+        is_close = np.linalg.norm(source_pos - image_pos, axis=1) < fusion
+        ampl_src = np.sum(amplitudes[is_close])
+        source_pos = np.sum(image_pos[is_close] * amplitudes[is_close, np.newaxis], axis=0) / ampl_src
+        image_pos, amplitudes = image_pos[~is_close], amplitudes[~is_close]  # remove the merged sources
+    else:
+        ampl_src = amplitudes[min_dist_ind]
+        image_pos = image_pos[np.arange(len(image_pos)) != min_dist_ind]  # image sources (removed the source)
+        amplitudes = amplitudes[np.arange(len(image_pos)) != min_dist_ind]
+
+    n_image_src = len(image_pos)
+    order1, wall_pos = np.empty([6, 3], dtype=float), np.empty([6, 3], dtype=float)
     ampl_order1 = np.empty(6, dtype=float)
+    dist = np.linalg.norm(source_pos[np.newaxis, :] - image_pos, axis=1)  # distances to source
     sorted_dist_ind = np.argsort(dist)
 
-    closest_src = image_sources[sorted_dist_ind[0]]  # image source that is closest to the source (should be order 1)
+    closest_src = image_pos[sorted_dist_ind[0]]  # image source that is closest to the source (should be order 1)
     order1[0] = closest_src
     ampl_order1[0] = amplitudes[sorted_dist_ind[0]]
     wall_pos[0] = (closest_src + source_pos) / 2.
@@ -149,17 +124,23 @@ def find_order1(image_pos, amplitudes, fusion=0., tol=0.1):
     old_found = 0
     while nb_found < 6:  # loop over the image sources until an order 1 is found
         found = True
-        curr_source = image_sources[sorted_dist_ind[it_dist]]
+        curr_source = image_pos[sorted_dist_ind[it_dist]]
         for k in range(nb_found):  # check if the point is in the same half-space as another order 1 source
             if same_half_space(order1[k], curr_source, normal_vect[k], origins[k], tol=tol):
                 found = False
                 break
         if found:
             if fusion > 0:  # merge sources at dist < fusion of curr_source, average by amplitudes
-                is_close = np.linalg.norm(curr_source - image_sources, axis=1) < fusion
+                is_close = np.linalg.norm(curr_source - image_pos, axis=1) < fusion
                 ampl_order1[nb_found] = np.sum(amplitudes[is_close])
-                order1[nb_found] = (np.sum(image_sources[is_close] * amplitudes[is_close, np.newaxis], axis=0) /
+                order1[nb_found] = (np.sum(image_pos[is_close] * amplitudes[is_close, np.newaxis], axis=0) /
                                     ampl_order1[nb_found])
+                image_pos, amplitudes = image_pos[~is_close], amplitudes[~is_close]  # remove the merged sources
+
+                # recompute the distances in case of fusion
+                dist = np.linalg.norm(source_pos[np.newaxis, :] - image_pos, axis=1)  # distances to source
+                sorted_dist_ind, n_image_src = np.argsort(dist), len(dist)
+                it_dist = 0
             else:
                 order1[nb_found] = curr_source
                 ampl_order1[nb_found] = amplitudes[sorted_dist_ind[it_dist]]
@@ -169,173 +150,11 @@ def find_order1(image_pos, amplitudes, fusion=0., tol=0.1):
             nb_found += 1
             old_found = nb_found
 
-
         it_dist += 1
         if it_dist == n_image_src and nb_found < 6:  # if all the image sources have been checked and not enough
             tol *= 1.5  # order 1 sources have been found, increase the tolerance and start again
             it_dist = old_found
-    return order1[:nb_found], wall_pos[:nb_found], source_pos, ampl_order1[:nb_found]
-
-
-def hough_transform(image_pos, dphi, dtheta, thresh):
-    """Fill an accumulator acc(theta, phi) with the number of points contained in the corresponding plan passing
-    through origin. A point is considered to be contained in the plane if its distance to the plane is inferior to
-    'thresh'."""
-    theta_bins = np.arange(0, np.pi + dtheta, dtheta)
-    phi_bins = np.arange(-np.pi / 2, np.pi / 2, dphi)
-    ntheta = len(theta_bins)
-    normal_vectors = np.stack([np.sin(phi_bins[:, np.newaxis]) * np.cos(theta_bins[np.newaxis, :]),
-                               np.sin(phi_bins[:, np.newaxis]) * np.sin(theta_bins[np.newaxis, :]),
-                               np.repeat(np.cos(phi_bins), ntheta).reshape(-1, ntheta)], axis=-1)
-
-    acc = np.zeros_like(normal_vectors[:, :, 0])
-
-    for k in range(len(image_pos)):
-        # using Hesse normal form to update the accumulator
-        acc[np.abs(np.einsum("ijk,k->ij", normal_vectors, image_pos[k])) < thresh] += 1
-
-    return acc, theta_bins, phi_bins
-
-
-def find_best_planes(source, image_pos, dphi, dtheta, thresh, nplanes=2, excl_phi=np.pi/45, excl_theta=np.pi/45,
-                     plot=False, verbose=False, degrees=False):
-    """Return the coordinates of an orthonormal basis passing by the three planes that contain the source and most of
-    the image sources positions in cartesian coordinates."""
-
-    if degrees:
-        dtheta = degrees_to_rad(dtheta)
-        dphi = degrees_to_rad(dphi)
-        excl_phi = degrees_to_rad(excl_phi)
-        excl_theta = degrees_to_rad(excl_theta)
-
-    exclusion_length_theta = int(np.rint(excl_theta/dtheta))
-    exclusion_length_phi = int(np.rint(excl_phi/dphi))
-
-    # translating the coordinates to use the source as the new origin
-    image_pos = image_pos - source
-
-    acc, theta_bins, phi_bins = hough_transform(image_pos, dphi, dtheta, thresh)
-
-    old_acc = acc.copy() if plot else None
-
-    res = []
-    for i in range(nplanes):
-        best_ind = np.argsort(acc.reshape(-1))[-1]
-        ind = np.unravel_index(best_ind, shape=np.shape(acc))
-        theta, phi = theta_bins[ind[1]], phi_bins[ind[0]]
-        res.append((theta, phi))
-        acc[np.maximum(ind[0] - exclusion_length_theta, 0):ind[0] + exclusion_length_theta,
-            ind[1] - exclusion_length_phi:ind[1] + exclusion_length_phi] = 0.
-
-    res = [spherical_to_cartesian(1., el[0], el[1]) for el in res]
-    if nplanes == 2:
-        coord1, coord2 = res[:2]
-        if verbose:
-            print("Dot product between the first two vectors : ", np.dot(coord1, coord2))
-
-        coord3 = np.cross(coord1, coord2)
-        basis = np.stack([coord1, coord2, coord3])
-        if plot:
-            fig = plt.figure()
-            ax = fig.add_subplot(131)
-            ims = ax.imshow(old_acc, extent=(0, np.pi, -np.pi / 2, np.pi / 2), origin='lower')
-            fig.colorbar(ims)
-
-            ax = fig.add_subplot(132, projection="3d")
-            coord1p, coord2p = 10 * coord1, 10 * coord2
-
-            ax.scatter(image_pos[:, 0], image_pos[:, 1], image_pos[:, 2])
-            ax.scatter(0, 0, 0, color='red')
-            ax.plot3D([0., coord1p[0]], [0., coord1p[1]], [0., coord1p[2]])
-            ax.plot3D([0., coord2p[0]], [0., coord2p[1]], [0., coord2p[2]])
-
-            ax = fig.add_subplot(133, projection="3d")
-            transpos = image_pos @ basis.T
-            ax.scatter(transpos[:, 0], transpos[:, 1], transpos[:, 2])
-            ax.scatter(0, 0, 0, color='red')
-            ax.plot3D([0., 1], [0., 0], [0., 0])
-            ax.plot3D([0., 0], [0., 1], [0., 0])
-            ax.plot3D([0., 0], [0., 0], [0., 1])
-            plt.show()
-    else:
-        basis = np.stack(res)
-
-    if plot and nplanes != 2:
-        print("plot not supported for nplanes != 2")
-
-    return basis
-
-
-def pos_to_dim(full_image_pos, dx=0.02, sep=1., min_wall_dist=0.5, max_room_dim=15., plot=False):
-    """Return the clusters of coordinate-wise distances between the image sources (source included).
-    This assumes the coordinates are given in the referencial of the rectangular room (ie the basis vectors follow the
-    directions of the room walls. Two
-    distances are in the same cluster if they differ by less than 'thresh'."""
-
-    diffs = []
-    for i in range(3):
-        tmp = full_image_pos[:, np.newaxis, i] - full_image_pos[np.newaxis, :, i]
-        diffs.append(tmp[tmp > 0].flatten())
-
-    diffs = np.stack(diffs, axis=-1) / 2.
-    ind_sep = int(np.rint(sep / dx))  # minimum index separation between two spikes
-    thresh_factor = 2
-
-    bins = np.arange(min_wall_dist, max_room_dim + dx, dx)
-    dims, dists = np.zeros(3), np.zeros(3)
-    for i in range(3):
-        # compute the coordinate distance histogram
-        tmp, _ = np.histogram(diffs[:, i], bins=bins)
-
-        # delete the values under a relative threshold
-        thresh = np.max(tmp) / thresh_factor
-        tmp[tmp < thresh] = 0
-
-        # extract spikes
-        tmp = simplify_hist(tmp, ind_sep, it_max=None, window_size=3)
-
-        best_ind = np.sort(np.where(tmp > 0)[0])[:3]
-
-        d1, dd = bins[best_ind][:2]
-
-        is_pos = np.sum(np.abs(full_image_pos[:, i] - 2*d1) < dx) > np.sum(np.abs(full_image_pos[:, i] + 2*d1) < dx)
-
-        if is_pos:  # check if d1 is the distance to the wall with positive coordinate
-            # model where dd=d2
-            coord1 = generate_src_coordinates(d1, dd, lower_bound=np.min(full_image_pos[:, i]),
-                                              upper_bound=np.max(full_image_pos[:, i]))
-
-            # model where dd=dim (d1=d2)
-            coord2 = generate_src_coordinates(d1, dd - d1, lower_bound=np.min(full_image_pos[:, i]),
-                                              upper_bound=np.max(full_image_pos[:, i]))
-        else:
-            coord1 = generate_src_coordinates(dd, d1, lower_bound=np.min(full_image_pos[:, i]),
-                                              upper_bound=np.max(full_image_pos[:, i]))
-            coord2 = generate_src_coordinates(dd - d1, d1, lower_bound=np.min(full_image_pos[:, i]),
-                                              upper_bound=np.max(full_image_pos[:, i]))
-
-        # check which configuration is more likely
-        penalization = 1  # penalization factor of false negatives
-        best_model = np.argmax([image_source_score(full_image_pos[:, i], coord1, penalization=penalization, tol=dx),
-                                image_source_score(full_image_pos[:, i], coord2, penalization=penalization, tol=dx)])
-
-        dim = dd + d1 if (best_model == 0) else dd
-        if not is_pos:  # update d1 to be the distance to the wall of positive coordinate
-            d1 = dim - d1
-        dims[i] = (dim + dx / 2)   # thresh/2 offset relative to bin western edge
-        dists[i] = (d1 + dx / 2)
-
-    if plot:
-        fig, ax = plt.subplots(1, 3)
-        for i in range(3):
-            ax[i].hist(diffs[:, i], bins=bins)
-        plt.show()
-
-    return dims, dists
-
-
-def sigmoid_der(x):
-    return np.exp(-x) * expit(x)**2
+    return order1[:nb_found], wall_pos[:nb_found], source_pos, ampl_order1[:nb_found], ampl_src
 
 
 def trim_clusters(cluster_centers, cluster_size, labels, threshold, trim_edges=True):
