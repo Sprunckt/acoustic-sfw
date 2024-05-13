@@ -2,6 +2,8 @@
 
 ![alt text](sfwb.gif)
 
+**Update : see below for room geometry estimation**
+
 Adapted Sliding Frank-Wolfe algorithm for 3D image source recovery from room impulse responses. 
 The algorithm is described in our paper [Gridless 3D Recovery of Image Sources from Room Impulse Responses](https://hal.archives-ouvertes.fr/hal-03763838v2).
 The version of the code used in the paper for image source localization is available in the main branch at commit [1356302](https://github.com/Sprunckt/acoustic-sfw/tree/135630234a8aa16a229b3fcb8500be87c8770e8c).
@@ -23,6 +25,7 @@ Note : A minor bug was later fixed at commit
 [ed6a084](https://github.com/Sprunckt/acoustic-sfw/tree/ed6a084bcfe4791c5ca21fbb51872413f200cd7b)
 with a negligible impact on the reported results. A bug in the case where the separation constraints in room generation 
 were different (not tested in the paper) has also been fixed and the most recent version of the code should be used.
+# I - Image-source localization
 
 ## 1 - Basic intructions
 
@@ -138,3 +141,47 @@ Corresponding initialization method: find an approximate time of arrival for eac
 For each of the 8 times of arrivals selected, generate 3 concentric spheres centered around the corresponding microphone and 
 separated by 5cm from each other. The argmax of the certificate eta over the reunion of these grids is used as an initial guess.
 Only apply a single sliding step at the end of the algorithm. Note that some arguments are not used here (e.g "roughgtol", "rmax").
+
+# II - Cuboid room geometry estimation
+
+This part of the code is used to estimate the geometric configuration of a cuboid room from the estimated image-source locations.
+The functions are contained in src/tools/geometry_reconstruction.py.
+The full procedure is detailed in our paper [Fully Reversing the Shoebox Image Source Method: From Impulse Responses to Room Parameters](https://hal.science/hal-04567514).
+
+## 1 - Orientation estimation
+
+The orientation of the room can be recovered by using the RotationFitter class. Assuming that the estimated source
+positions are stored in ```recons_pos```, the orientation can be estimated as follows:
+
+```python
+fitter = KernelFitter(image_pos=recons_pos)  # input the estimated source positions in the microphone array basis
+bandwidth_values3d = [0.01, 0.005, 0.0005]  # 3d bandwitdh values
+bandwidth_values2d = [0.01, 0.005, 0.0005]  # 2d bandwitdh values
+
+basis = fitter.fit(gridparam=1., niter=10000, tol=1e-10, bvalues3d=bandwidth_values3d,
+                   bvalues2d=bandwidth_values2d, verbose=True, plot=False)
+```
+
+```basis``` is a 3x3 rotation matrix that can be used to change the coordinate system to a referential frame of the room.
+
+
+## 2 - Dimension estimation
+
+Once a basis has been estimated, the geometric information can be recovered by calling ```find_dimensions_ns```
+(where ```reconstr_ampl``` contains the estimated source amplitudes):
+
+
+```python
+(dist_found, estimated_src_pos, estimated_src_ampl,
+ order1_ampl, order1_found) = find_dimensions_ns(recons_pos, basis=basis,
+                                                      amplitudes=reconstr_ampl,
+                                                      fusion=True, cone_width=5)
+```
+
+* ```dist_found``` is the estimated distance between the original source and the walls (shape (2, 3))
+* ```estimated_src_pos``` is the estimated source position in the array referential (shape (3,))
+* ```estimated_src_ampl``` is the estimated source amplitude (```1 - src_ampl**2``` gives the absorption coefficient)
+* ```order1_ampl``` is the estimated order 1 source amplitudes (shape (3, 2))
+* ```order1_pos``` is the estimated order 1 source positions (shape (6, 3))
+
+The whole room configuration can then be estimated using these values.
