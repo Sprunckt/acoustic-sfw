@@ -95,7 +95,7 @@ if load:
     res = np.load('../mes.npz')
     x, a, r = res['x'], res['a'], res['rir']
 else:
-    a, x = s.reconstruct(grid, 8, True, True)
+    a, x = s.reconstruct(grid, 8)
     r = s.gamma(a, x)
     np.savez("../mes.npz", a=a, x=x, rir=r)
 
